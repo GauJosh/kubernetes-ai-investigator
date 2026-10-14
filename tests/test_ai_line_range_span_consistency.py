@@ -91,6 +91,28 @@ def _finding(evidence_id: str, start_line: int, end_line: int, quoted_text: str)
     )
 
 
+def _refs_for_lines(bundle: EvidenceBundle, evidence_id: str, lines_wanted: list[int]) -> list[str]:
+    """The model no longer constructs line_range citations for line-indexed text -- it selects
+    refs. This reads the real refs for the given 0-indexed lines straight from the same
+    build_model_input output the model itself would be shown."""
+    model_input = build_model_input(bundle, [])
+    all_lines = model_input["evidence"][evidence_id]["payload"]["lines"]
+    by_line = {entry["line"]: entry["ref"] for entry in all_lines}
+    return [by_line[n] for n in lines_wanted]
+
+
+def _ref_candidate(bundle: EvidenceBundle, evidence_id: str, lines_wanted: list[int], confidence: str = "HIGH") -> dict:
+    """A correctly-constructed line_citations candidate -- the new, only way to cite
+    line-indexed text. Always span-consistent by construction; there is no "declared range"
+    for the model to get wrong anymore."""
+    return {
+        "statement": "The connection to PostgreSQL is refused.",
+        "confidence": confidence, "limitation": None, "contradicts": None,
+        "evidence_locators": [],
+        "line_citations": [{"evidence_id": evidence_id, "refs": _refs_for_lines(bundle, evidence_id, lines_wanted)}],
+    }
+
+
 def _candidate(evidence_id: str, start_line: int, end_line: int, quoted_text: str) -> dict:
     return {
         "statement": "The connection to PostgreSQL is refused.",
@@ -117,9 +139,14 @@ def test_exact_traceback_quote_with_correctly_widened_range_is_accepted():
 
 
 def test_exact_traceback_quote_with_correctly_widened_range_accepted_end_to_end():
+    """Updated for the citation-reference increment: the model no longer constructs a
+    start_line/end_line range for line-indexed text at all -- it selects the two refs
+    covering the real two-line message, and code resolves the exact same quote."""
     bundle, log_item = _log_bundle(_TRACEBACK_LINES)
     client = FakeHypothesisModelClient()
-    client.response = json.dumps([_candidate(log_item.id, _ERROR_LINE, _CONTINUATION_LINE, _FULL_QUOTE)])
+    client.response = json.dumps(
+        [_ref_candidate(bundle, log_item.id, [_ERROR_LINE, _CONTINUATION_LINE])]
+    )
 
     results = generate_ai_hypotheses(bundle, [make_marker_deterministic_finding()], client, model_identifier="model:test@v1")
 
@@ -265,16 +292,19 @@ def test_redacted_evidence_end_to_end_via_generate_ai_hypotheses():
 
 
 def test_mixed_batch_span_mismatch_wrong_line_and_valid_citation_only_valid_survives():
-    """A richer mixed-batch test than the first follow-up's: one candidate hits the NEW span
-    check, one hits the ORIGINAL content check, one is fully valid -- only the valid one
-    should reach the report."""
+    """A richer mixed-batch test than the first follow-up's. The two old-shaped,
+    raw-line_range candidates no longer parse at all under the citation-reference increment
+    (evidence_locators now accepts field_path only) and are dropped at parse time instead of
+    validation time -- same ultimate outcome, different mechanism; this is itself a
+    regression check that a malformed legacy-shaped candidate never resurrects the retired
+    line_range-via-evidence_locators path. Only the ref-based, valid candidate survives."""
     bundle, log_item = _log_bundle(_TRACEBACK_LINES)
     client = FakeHypothesisModelClient()
     client.response = json.dumps(
         [
-            _candidate(log_item.id, _ERROR_LINE, _ERROR_LINE, _FULL_QUOTE),  # span mismatch
-            _candidate(log_item.id, _WRONG_LINE, _WRONG_LINE, _TRACEBACK_LINES[_ERROR_LINE]),  # wrong line
-            _candidate(log_item.id, _ERROR_LINE, _CONTINUATION_LINE, _FULL_QUOTE),  # valid
+            _candidate(log_item.id, _ERROR_LINE, _ERROR_LINE, _FULL_QUOTE),  # legacy shape, dropped at parse
+            _candidate(log_item.id, _WRONG_LINE, _WRONG_LINE, _TRACEBACK_LINES[_ERROR_LINE]),  # legacy shape, dropped at parse
+            _ref_candidate(bundle, log_item.id, [_ERROR_LINE, _CONTINUATION_LINE]),  # valid
         ]
     )
 

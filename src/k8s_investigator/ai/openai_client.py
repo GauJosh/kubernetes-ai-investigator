@@ -64,8 +64,11 @@ _RESPONSE_JSON_SCHEMA: dict[str, Any] = {
                     "evidence_locators": {
                         "type": "array",
                         "description": (
-                            "At least one. Every evidence_id MUST be a key that actually "
-                            "appears in the input's 'evidence' object -- never invent one."
+                            "Structured (payload_shape: \"structured\") evidence only. Every "
+                            "evidence_id MUST be a key that actually appears in the input's "
+                            "'evidence' object -- never invent one. For line-indexed text "
+                            "(payload_shape: \"line_indexed_text\"), use 'line_citations' "
+                            "instead -- do not use this field for that evidence shape."
                         ),
                         "items": {
                             "type": "object",
@@ -76,44 +79,57 @@ _RESPONSE_JSON_SCHEMA: dict[str, Any] = {
                                     "description": "The exact substring/value the pointer resolves to -- copy it verbatim, do not paraphrase.",
                                 },
                                 "pointer": {
-                                    "anyOf": [
-                                        {
-                                            "type": "object",
-                                            "properties": {
-                                                "pointer_type": {"type": "string", "const": "field_path"},
-                                                "json_pointer": {
-                                                    "type": "string",
-                                                    "description": "RFC 6901 JSON Pointer into the evidence item's structured payload, e.g. /status/phase.",
-                                                },
-                                            },
-                                            "required": ["pointer_type", "json_pointer"],
-                                            "additionalProperties": False,
+                                    "type": "object",
+                                    "properties": {
+                                        "pointer_type": {"type": "string", "const": "field_path"},
+                                        "json_pointer": {
+                                            "type": "string",
+                                            "description": "RFC 6901 JSON Pointer into the evidence item's structured payload, e.g. /status/phase.",
                                         },
-                                        {
-                                            "type": "object",
-                                            "properties": {
-                                                "pointer_type": {"type": "string", "const": "line_range"},
-                                                "start_line": {
-                                                    "type": "integer",
-                                                    "description": "Copy this exactly from the 'line' value of a line in that evidence item's payload.lines array -- never count lines yourself.",
-                                                },
-                                                "end_line": {
-                                                    "type": "integer",
-                                                    "description": "Same evidence item's 'line' value where the cited range ends (equal to start_line for a single line).",
-                                                },
-                                            },
-                                            "required": ["pointer_type", "start_line", "end_line"],
-                                            "additionalProperties": False,
-                                        },
-                                    ]
+                                    },
+                                    "required": ["pointer_type", "json_pointer"],
+                                    "additionalProperties": False,
                                 },
                             },
                             "required": ["evidence_id", "quoted_text", "pointer"],
                             "additionalProperties": False,
                         },
                     },
+                    "line_citations": {
+                        "type": "array",
+                        "description": (
+                            "Line-indexed text (payload_shape: \"line_indexed_text\") only. "
+                            "Each entry selects one or more pre-issued 'ref' ids from that "
+                            "evidence item's payload.lines[] instead of constructing a line "
+                            "range or transcribing a quote -- code resolves the exact text. "
+                            "For structured evidence, use 'evidence_locators' instead."
+                        ),
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "evidence_id": {
+                                    "type": "string",
+                                    "description": "The evidence item every ref below must actually belong to.",
+                                },
+                                "refs": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": (
+                                        "One or more 'ref' values copied verbatim from that "
+                                        "evidence item's payload.lines[]. For a multi-line "
+                                        "quote (e.g. an error message continuing onto an "
+                                        "indented line), list every included line's ref -- "
+                                        "they must be contiguous, ascending lines from the "
+                                        "SAME evidence item. Never invent a ref."
+                                    ),
+                                },
+                            },
+                            "required": ["evidence_id", "refs"],
+                            "additionalProperties": False,
+                        },
+                    },
                 },
-                "required": ["statement", "confidence", "limitation", "contradicts", "evidence_locators"],
+                "required": ["statement", "confidence", "limitation", "contradicts", "evidence_locators", "line_citations"],
                 "additionalProperties": False,
             },
         }
@@ -141,26 +157,28 @@ quote the actual raw value at a real pointer into that evidence's "payload" -- n
 finding's own wording.
 
 Every evidence item carries an explicit "payload_shape": either "line_indexed_text" or
-"structured". Check this field, not the shape of the payload itself, to decide which pointer
-type to use -- do not guess from appearance.
+"structured". Check this field, not the shape of the payload itself, to decide how to cite
+it -- do not guess from appearance, and do not mix the two citation mechanisms below.
 
-For "payload_shape": "line_indexed_text", the payload looks like {"lines": [{"line": 0, "text":
-"..."}, {"line": 1, "text": "..."}, ...], "lines_total": N}. Use pointer_type "line_range" and
-set start_line/end_line to the exact integer "line" values shown -- never count lines yourself,
-copy the number. quoted_text must be exactly the "text" value(s) for the line(s) cited (joined
-by a single newline if citing more than one line, in order), with no added numbering, brackets,
-or the word "line" -- quote only the real content. If your quote spans more than one line (for
-example, an error message that continues onto an indented continuation line), end_line MUST be
-the "line" number of the LAST line included in quoted_text -- end_line equal to start_line means
-your quote is exactly one line, no more.
+For "payload_shape": "line_indexed_text" (logs), the payload looks like {"lines": [{"line": 0,
+"text": "...", "ref": "<id>"}, {"line": 1, "text": "...", "ref": "<id>"}, ...], "lines_total":
+N}. Put a "line_citations" entry on your hypothesis instead of an "evidence_locators" entry --
+{"evidence_id": "<that evidence item's id>", "refs": ["<ref>", ...]} -- naming the "ref" value
+of every line you mean, copied verbatim. You do not construct a line range and you do not
+transcribe a quote yourself for this shape at all; code resolves the exact text from the refs
+you select. For a quote spanning more than one line (e.g. an error message continuing onto an
+indented continuation line), list every included line's ref, in any order -- they must be a
+contiguous, ascending run of lines from that one evidence item. A line with no "ref" key (it
+was withheld or cut by length limits) cannot be cited at all -- do not invent one.
 
-For "payload_shape": "structured", the payload is a JSON object (e.g. a Pod, Event, or Node).
-Use pointer_type "field_path" with an RFC 6901 JSON Pointer *relative to that payload object
-directly* -- do NOT include a leading "/payload" segment. For example, if the evidence entry is
-{"payload_shape": "structured", "payload": {"message": "..."}}, the correct json_pointer for
-that field is "/message", NOT "/payload/message". A field_path pointer must resolve to a single
-scalar value (a string, number, or boolean) -- never point at a nested object or array; drill
-down to the specific field you mean (e.g. "/status/phase", not "/status").
+For "payload_shape": "structured" (e.g. a Pod, Event, or Node object), use "evidence_locators"
+exactly as before: pointer_type "field_path" with an RFC 6901 JSON Pointer *relative to that
+payload object directly* -- do NOT include a leading "/payload" segment. For example, if the
+evidence entry is {"payload_shape": "structured", "payload": {"message": "..."}}, the correct
+json_pointer for that field is "/message", NOT "/payload/message". A field_path pointer must
+resolve to a single scalar value (a string, number, or boolean) -- never point at a nested
+object or array; drill down to the specific field you mean (e.g. "/status/phase", not
+"/status"). You still transcribe quoted_text yourself for this shape, exactly as before.
 
 If a "contradictions" array is present and non-empty, each entry names two evidence_ids
 (evidence_a, evidence_b) that disagree, with a rule_id and description. If your hypothesis
@@ -176,16 +194,18 @@ silently rejected, not corrected):
 - quoted_text identical to any "findings" entry's "statement" is REJECTED -- a finding's
   statement is marked "citable": false for exactly this reason; quote the real evidence value
   instead, even when it describes the same fact.
-- For a line_range citation, end_line - start_line + 1 MUST equal the number of lines your own
-  quoted_text spans -- a range that is narrower or wider than your quote is rejected even if
-  the quoted text itself is accurate.
+- Every line_citations[].refs value MUST be a "ref" that actually appears in that evidence
+  item's payload.lines[] -- an unknown ref, a ref that actually belongs to a different
+  evidence item than the one named, or a selection that is not a contiguous ascending run of
+  lines (including a duplicate) is REJECTED, not repaired or substituted.
 - confidence "HIGH" is REJECTED unless at least one DETERMINISTIC_FINDING is present in the
   input's "findings" array. If "findings" contains no DETERMINISTIC_FINDING entry, the
   deterministic rule bank itself reached no confirmed conclusion -- use "MEDIUM" or "LOW"
   instead; a hypothesis is still welcome, just not asserted with unwarranted certainty.
 - A hypothesis citing evidence named in any "contradictions" entry with an empty 'limitation'
   is rejected (see above).
-- Every hypothesis MUST have at least one evidence_locators entry and a confidence value.
+- Every hypothesis MUST have at least one evidence_locators or line_citations entry (or both)
+  and a confidence value.
 
 If the evidence is insufficient to support any hypothesis, return an empty "hypotheses" array.
 Returning nothing is correct and expected when you are not confident -- it is always preferable

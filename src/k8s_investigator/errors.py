@@ -149,3 +149,51 @@ class FindingStatementCitedAsEvidenceError(InvestigatorError):
             "actually present in that evidence's payload -- a Finding's statement is a "
             "non-citable summary, never source text."
         )
+
+
+class UnknownCitationReferenceError(InvestigatorError):
+    """A line_citations entry named a reference id that was never issued in this model input.
+
+    Treated as untrusted input, always rejected outright -- never silently substituted for a
+    different, real reference, and never treated as if it resolved to empty/nothing.
+    """
+
+    def __init__(self, ref: str) -> None:
+        self.ref = ref
+        super().__init__(
+            f"Citation reference {ref!r} was not issued for this investigation -- unknown "
+            "or fabricated reference ids are rejected, never substituted."
+        )
+
+
+class CitationReferenceEvidenceMismatchError(InvestigatorError):
+    """A line_citations entry's own stated evidence_id does not match the evidence_id the
+    referenced line was actually issued for.
+
+    The model states an evidence_id to make its citation self-describing and reviewable
+    (mirroring structured field_path citations), but code -- never the model's own claim --
+    is the authority on which evidence a given reference actually belongs to.
+    """
+
+    def __init__(self, ref: str, claimed_evidence_id: str, actual_evidence_id: str) -> None:
+        self.ref = ref
+        self.claimed_evidence_id = claimed_evidence_id
+        self.actual_evidence_id = actual_evidence_id
+        super().__init__(
+            f"Citation reference {ref!r} belongs to evidence {actual_evidence_id!r}, not the "
+            f"claimed {claimed_evidence_id!r}."
+        )
+
+
+class MalformedCitationReferenceSelectionError(InvestigatorError):
+    """A line_citations entry's references do not form a valid selection: empty, containing a
+    duplicate, or not a contiguous, ascending run of lines from one evidence item.
+
+    Code never repairs a malformed selection (e.g. by sorting, deduplicating, or dropping the
+    offending reference and keeping the rest) -- the whole citation is rejected.
+    """
+
+    def __init__(self, refs: list[str], reason: str) -> None:
+        self.refs = refs
+        self.reason = reason
+        super().__init__(f"Citation references {refs!r} are not a valid line selection: {reason}")

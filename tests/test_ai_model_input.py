@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from k8s_investigator.ai.model_input import DEFAULT_MAX_PAYLOAD_CHARS, build_model_input
+from k8s_investigator.ai.model_input import DEFAULT_MAX_PAYLOAD_CHARS, build_model_input, make_line_ref
 from k8s_investigator.canonical import content_hash
 from k8s_investigator.models.evidence import EvidenceBundle, EvidenceItem, EvidenceStatus
 from k8s_investigator.models.findings import Confidence, Finding, FindingKind
@@ -169,7 +169,9 @@ def test_long_single_line_payload_is_truncated_and_flagged():
     assert entry["payload"]["lines_total"] == 1
     assert entry["payload"]["truncated"] is True
     assert len(entry["payload"]["lines"]) == 1
-    assert entry["payload"]["lines"][0] == {"line": 0, "text": "x" * DEFAULT_MAX_PAYLOAD_CHARS}
+    assert entry["payload"]["lines"][0] == {
+        "line": 0, "text": "x" * DEFAULT_MAX_PAYLOAD_CHARS, "ref": make_line_ref(log.id, 0),
+    }
 
 
 def test_short_string_payload_is_not_truncated():
@@ -180,7 +182,9 @@ def test_short_string_payload_is_not_truncated():
     entry = model_input["evidence"][log.id]
 
     assert "payload_truncated" not in entry
-    assert entry["payload"] == {"lines": [{"line": 0, "text": "short log"}], "lines_total": 1}
+    assert entry["payload"] == {
+        "lines": [{"line": 0, "text": "short log", "ref": make_line_ref(log.id, 0)}], "lines_total": 1,
+    }
 
 
 def test_custom_max_payload_chars_is_respected():
@@ -190,7 +194,7 @@ def test_custom_max_payload_chars_is_respected():
     model_input = build_model_input(bundle, [], max_payload_chars=5)
     entry = model_input["evidence"][log.id]
 
-    assert entry["payload"]["lines"] == [{"line": 0, "text": "01234"}]
+    assert entry["payload"]["lines"] == [{"line": 0, "text": "01234", "ref": make_line_ref(log.id, 0)}]
     assert entry["payload_truncated"] is True
 
 
@@ -202,12 +206,27 @@ def test_multiline_log_each_line_gets_its_own_explicit_zero_indexed_number():
     entry = model_input["evidence"][log.id]
 
     assert entry["payload"]["lines"] == [
-        {"line": 0, "text": "alpha"},
-        {"line": 1, "text": "beta"},
-        {"line": 2, "text": "gamma"},
+        {"line": 0, "text": "alpha", "ref": make_line_ref(log.id, 0)},
+        {"line": 1, "text": "beta", "ref": make_line_ref(log.id, 1)},
+        {"line": 2, "text": "gamma", "ref": make_line_ref(log.id, 2)},
     ]
     assert entry["payload"]["lines_total"] == 3
     assert "truncated" not in entry["payload"]
+
+
+def test_each_line_gets_a_distinct_stable_ref():
+    """Refs are keyed by (evidence_id, line), not by text -- two identical lines at different
+    positions must still get distinct refs (requirement 1), and the same bundle rebuilt twice
+    must produce the exact same refs (requirement 2/reproducibility)."""
+    log = _log_item("same text\nsame text\n")
+    bundle = _bundle(log)
+
+    first = build_model_input(bundle, [])["evidence"][log.id]["payload"]["lines"]
+    second = build_model_input(bundle, [])["evidence"][log.id]["payload"]["lines"]
+
+    assert first == second  # fully reproducible
+    assert first[0]["text"] == first[1]["text"] == "same text"
+    assert first[0]["ref"] != first[1]["ref"]  # distinct despite identical text
 
 
 def test_multiline_log_truncation_drops_whole_trailing_lines_never_a_partial_line():
@@ -221,10 +240,26 @@ def test_multiline_log_truncation_drops_whole_trailing_lines_never_a_partial_lin
     model_input = build_model_input(bundle, [], max_payload_chars=9)
     entry = model_input["evidence"][log.id]
 
-    assert entry["payload"]["lines"] == [{"line": 0, "text": "alpha"}, {"line": 1, "text": "beta"}]
+    assert entry["payload"]["lines"] == [
+        {"line": 0, "text": "alpha", "ref": make_line_ref(log.id, 0)},
+        {"line": 1, "text": "beta", "ref": make_line_ref(log.id, 1)},
+    ]
     assert entry["payload"]["lines_total"] == 4
     assert entry["payload"]["truncated"] is True
     assert entry["payload_truncated"] is True
+
+
+def test_truncated_away_line_never_gets_a_ref_anywhere_in_the_output():
+    """Requirement 2/3: a line cut by truncation must never be referenceable at all -- not
+    just absent from "lines", but its would-be ref must not appear anywhere in the output."""
+    log = _log_item("alpha\nbeta\ngamma\n")
+    bundle = _bundle(log)
+
+    model_input = build_model_input(bundle, [], max_payload_chars=5)  # only "alpha" fits
+    serialized = str(model_input)
+
+    assert make_line_ref(log.id, 1) not in serialized  # "beta"'s ref must not appear
+    assert make_line_ref(log.id, 2) not in serialized  # "gamma"'s ref must not appear
 
 
 def test_non_present_evidence_item_has_no_payload_key():

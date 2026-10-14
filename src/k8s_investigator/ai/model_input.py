@@ -24,6 +24,17 @@ presentation change only: it is computed from the exact same ``.splitlines()`` c
 against the real ``EvidenceBundle`` -- nothing about validation changes, and a citation is
 exactly as easy or hard to forge as it was before; it is only easier to get *right*.
 
+**Citation references, the next increment.** Even with explicit line numbers, two more
+mechanical mistakes still occurred live: a correct quote with a too-narrow range, and (this
+module's own contribution to fixing) nothing stopped the model from mis-transcribing a line's
+text when asked to reproduce it itself. Each line now also carries a ``"ref"``
+(``make_line_ref``) -- a stable, content-derived id keyed by ``(evidence_id, line)``, issued
+only for lines that survived both redaction and truncation untouched. ``ai.hypothesis`` lets
+the model *select* one or more refs instead of constructing a ``LineRange`` and transcribing
+``quoted_text`` itself for line-indexed evidence; code resolves the selection into the exact
+line text, so there is nothing left for the model to mis-transcribe. Structured (``field_path``)
+citation is unchanged by this -- the model still constructs those itself, exactly as before.
+
 ``build_model_input`` is a pure function: the same ``bundle``/``findings`` always produce the
 same returned dict, independent of any model call -- this is the one part of the AI-hypothesis
 layer that keeps the project's full reproducibility guarantee (see canonical.py's
@@ -36,6 +47,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..canonical import content_hash
 from ..models.evidence import ContradictionEdge, EvidenceBundle, EvidenceItem, EvidenceStatus
 from ..models.findings import Finding, FindingKind
 from .redaction import redact_payload, redact_string_value
@@ -45,8 +57,23 @@ from .redaction import redact_payload, redact_string_value
 DEFAULT_MAX_PAYLOAD_CHARS = 4000
 
 
-def _project_line_indexed_text(text: str, max_payload_chars: int) -> dict[str, Any]:
-    """Render ``text`` (already redacted) as explicit, code-numbered lines.
+def make_line_ref(evidence_id: str, line: int) -> str:
+    """The stable, content-derived reference id for one line of one evidence item.
+
+    Keyed by (evidence_id, line) -- deliberately never by the line's own text -- so two
+    occurrences of identical text (duplicate log lines, or the same text at different lines)
+    always get distinct refs (requirement 1), and a ref for a given line never changes due to
+    truncation or how many other lines happen to be included (requirement 2): line 5's ref is
+    always ``make_line_ref(evidence_id, 5)`` regardless of whether lines 6+ made the cut.
+    """
+    return content_hash({"evidence_id": evidence_id, "line": line})[:16]
+
+
+def _project_line_indexed_text(
+    original_text: str, max_payload_chars: int, evidence_id: str
+) -> tuple[dict[str, Any], set[str]]:
+    """Render ``original_text`` (the real, unredacted payload) as explicit, code-numbered,
+    code-referenced lines. Returns ``(projection, redaction_categories)``.
 
     0-indexed via ``.splitlines()`` -- exactly ``validation._resolve_line_range``'s own
     addressing, computed here rather than left for the model to infer. Bounded at line
@@ -55,28 +82,51 @@ def _project_line_indexed_text(text: str, max_payload_chars: int) -> dict[str, A
     single line whose own text exceeds the entire remaining budget -- that line's text is
     capped so at least one line is always shown when there is any content at all, still as one
     unambiguous index.
+
+    Redaction happens *per line*, here, rather than once over the whole string beforehand --
+    deliberately, so this function knows exactly which individual lines were touched. A line
+    with nothing redacted gets a ``"ref"`` (``make_line_ref``); a line with something redacted
+    does NOT -- it is still shown (with its placeholder text, for context), but is never
+    assigned or exposed as a citable reference at all (requirement 3). None of this changes
+    *what* gets redacted: every pattern in ``redaction.py`` already excludes whitespace
+    (including newlines) from its matched spans, so applying them per line instead of once
+    over the whole string catches exactly the same content, line-confined either way.
+
+    Refs are computed after both redaction and this function's own truncation decision
+    (requirement 2): a line's ref always corresponds to its final, as-shown form, and a line
+    cut by truncation is never assigned one in the first place.
     """
-    all_lines = text.splitlines()
+    all_lines = original_text.splitlines()
     included: list[dict[str, Any]] = []
     budget_used = 0
     truncated = False
-    for i, line_text in enumerate(all_lines):
+    all_categories: set[str] = set()
+    for i, raw_line_text in enumerate(all_lines):
+        line_text, line_categories = redact_string_value(raw_line_text)
+        all_categories.update(line_categories)
         remaining = max_payload_chars - budget_used
         if remaining <= 0:
             truncated = True
             break
         if len(line_text) > remaining:
-            included.append({"line": i, "text": line_text[:remaining]})
+            line_text = line_text[:remaining]
             truncated = True
+            entry: dict[str, Any] = {"line": i, "text": line_text}
+            if not line_categories:
+                entry["ref"] = make_line_ref(evidence_id, i)
+            included.append(entry)
             break
-        included.append({"line": i, "text": line_text})
+        entry = {"line": i, "text": line_text}
+        if not line_categories:
+            entry["ref"] = make_line_ref(evidence_id, i)
+        included.append(entry)
         budget_used += len(line_text)
     if len(included) < len(all_lines):
         truncated = True
     result: dict[str, Any] = {"lines": included, "lines_total": len(all_lines)}
     if truncated:
         result["truncated"] = True
-    return result
+    return result, all_categories
 
 
 def _project_evidence_item(item: EvidenceItem, max_payload_chars: int) -> dict[str, Any]:
@@ -92,26 +142,31 @@ def _project_evidence_item(item: EvidenceItem, max_payload_chars: int) -> dict[s
         # need to infer "which of these two sections is actual source text" from context.
         # Only set where there is a "payload" to cite at all -- a gap has nothing to quote.
         entry["citable"] = True
-        # Redact BEFORE line-indexing/truncation: truncating or re-numbering first could
-        # split a credential-shaped span across a cut point and leave a partial fragment
-        # un-redacted on one side. Redaction never adds or removes a newline (see
-        # redaction.py), so line indices computed below always match the real bundle's.
-        payload, categories = redact_payload(item.payload)
-        if categories:
-            entry["redacted"] = True
-            entry["redaction_categories"] = sorted(categories)
-        if isinstance(payload, str):
+        if isinstance(item.payload, str):
             # Explicit discriminator, not left for the model to infer from shape: a live
             # evaluation showed the model sometimes using "line_range" against a structured
             # (dict) evidence item instead of "field_path" -- this names which pointer_type
             # applies, structurally, independent of any instruction text.
             entry["payload_shape"] = "line_indexed_text"
-            line_projection = _project_line_indexed_text(payload, max_payload_chars)
+            # Redaction happens per line, inside _project_line_indexed_text, not here -- see
+            # that function's docstring for why (it needs to know which specific lines were
+            # touched, to withhold a "ref" for exactly those and no others).
+            line_projection, categories = _project_line_indexed_text(item.payload, max_payload_chars, item.id)
             entry["payload"] = line_projection
+            if categories:
+                entry["redacted"] = True
+                entry["redaction_categories"] = sorted(categories)
             if line_projection.get("truncated"):
                 entry["payload_truncated"] = True
                 entry["payload_original_chars"] = len(item.payload)
         else:
+            # Redact BEFORE serialization: structured (dict) payloads are redacted as a
+            # whole here, unchanged from before this increment -- field_path citation
+            # behavior is explicitly out of scope for this increment.
+            payload, categories = redact_payload(item.payload)
+            if categories:
+                entry["redacted"] = True
+                entry["redaction_categories"] = sorted(categories)
             entry["payload_shape"] = "structured"
             entry["payload"] = payload
     if item.expiry_note:

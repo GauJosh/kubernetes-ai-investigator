@@ -15,6 +15,7 @@ import pytest
 from k8s_investigator.ai.hypothesis import (
     HypothesisParseError,
     RawHypothesisCandidate,
+    _resolve_candidate_locators,
     generate_ai_hypotheses,
     make_ai_hypothesis_finding,
     parse_candidates,
@@ -103,11 +104,15 @@ def test_parse_candidates_empty_array_is_valid_and_yields_no_candidates():
 # --- make_ai_hypothesis_finding: code-controlled identity/provenance --------------------------
 
 
+def _resolved(candidate: RawHypothesisCandidate) -> list:
+    return _resolve_candidate_locators(candidate, catalog={})
+
+
 def test_make_ai_hypothesis_finding_sets_kind_id_and_produced_by_from_code():
     pod = _pod_item()
     candidate = RawHypothesisCandidate.model_validate(_valid_candidate_json(pod.id))
 
-    finding = make_ai_hypothesis_finding(candidate, "model:test-model@v1")
+    finding = make_ai_hypothesis_finding(candidate, "model:test-model@v1", _resolved(candidate))
 
     assert finding.kind == FindingKind.AI_HYPOTHESIS
     assert finding.produced_by == "model:test-model@v1"
@@ -124,8 +129,8 @@ def test_make_ai_hypothesis_finding_id_is_independent_of_statement_wording():
     reworded["statement"] = "Completely different wording for the exact same claim."
     candidate_b = RawHypothesisCandidate.model_validate(reworded)
 
-    finding_a = make_ai_hypothesis_finding(candidate_a, "model:test-model@v1")
-    finding_b = make_ai_hypothesis_finding(candidate_b, "model:test-model@v1")
+    finding_a = make_ai_hypothesis_finding(candidate_a, "model:test-model@v1", _resolved(candidate_a))
+    finding_b = make_ai_hypothesis_finding(candidate_b, "model:test-model@v1", _resolved(candidate_b))
 
     assert finding_a.id == finding_b.id
     assert finding_a.statement != finding_b.statement
@@ -138,9 +143,9 @@ def test_make_ai_hypothesis_finding_id_changes_with_confidence_or_evidence():
     higher_confidence = RawHypothesisCandidate.model_validate(_valid_candidate_json(pod.id, "HIGH"))
     different_evidence = RawHypothesisCandidate.model_validate(_valid_candidate_json(other_pod.id, "MEDIUM"))
 
-    id_base = make_ai_hypothesis_finding(base, "model:test-model@v1").id
-    id_confidence = make_ai_hypothesis_finding(higher_confidence, "model:test-model@v1").id
-    id_evidence = make_ai_hypothesis_finding(different_evidence, "model:test-model@v1").id
+    id_base = make_ai_hypothesis_finding(base, "model:test-model@v1", _resolved(base)).id
+    id_confidence = make_ai_hypothesis_finding(higher_confidence, "model:test-model@v1", _resolved(higher_confidence)).id
+    id_evidence = make_ai_hypothesis_finding(different_evidence, "model:test-model@v1", _resolved(different_evidence)).id
 
     assert id_base != id_confidence
     assert id_base != id_evidence

@@ -9,6 +9,18 @@ Finding in this project goes through before being accepted; a candidate that fai
 never surfaced as if it were trustworthy -- the same discipline
 ``report_builder.build_report`` already applies to rule-produced findings.
 
+**Citation references (line-indexed text only).** For structured evidence, the model still
+constructs a complete ``FieldPathCitation`` itself, unchanged from before. For line-indexed
+text (logs), the model instead selects one or more ``"ref"`` ids
+(``model_input.make_line_ref``) via ``LineRefCitation`` -- it is no longer asked to construct
+a ``LineRange`` or transcribe ``quoted_text`` for that evidence shape at all.
+``_resolve_line_citation`` turns a selection into the exact same ``EvidenceLocator`` shape any
+other citation produces, by looking up each ref in a catalog built from the exact model input
+that was actually sent (``_build_ref_catalog``) -- never by re-deriving anything from the real
+bundle directly, so a reference always resolves to precisely what the model was shown, and
+``validate_finding_references`` (completely unchanged) remains the final, independent
+authority once the real ``EvidenceLocator`` exists.
+
 ``generate_ai_hypotheses`` is the only entry point a caller needs. It is never called by any
 default pipeline path -- a caller must explicitly invoke it with a real
 ``HypothesisModelClient`` (none exists in this phase; see ``model_client.py``).
@@ -18,18 +30,21 @@ from __future__ import annotations
 
 import json
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from ..canonical import content_hash
 from ..errors import (
+    CitationReferenceEvidenceMismatchError,
     FindingStatementCitedAsEvidenceError,
     InvestigatorError,
+    MalformedCitationReferenceSelectionError,
     UnacknowledgedContradictionError,
     UngroundedConfidenceError,
+    UnknownCitationReferenceError,
 )
 from ..models.evidence import ContradictionEdge, EvidenceBundle
 from ..models.findings import Confidence, Finding, FindingKind
-from ..models.locators import EvidenceLocator
+from ..models.locators import EvidenceLocator, FieldPath, LineRange
 from ..validation import validate_finding_references
 from .model_client import HypothesisModelClient
 from .model_input import build_model_input
@@ -46,6 +61,35 @@ class HypothesisParseError(Exception):
     the same empty-list signal as "the model legitimately found nothing."""
 
 
+class FieldPathCitation(BaseModel):
+    """A structured-evidence citation, unchanged from before the citation-reference increment:
+    the model constructs the complete citation itself, and ``validate_finding_references``
+    compares its ``quoted_text`` against the real bundle exactly as it always has. Narrowed
+    from the general ``EvidenceLocator`` to ``FieldPath`` only -- a ``line_range`` pointer is
+    no longer an accepted shape here at all; see ``LineRefCitation`` for line-indexed text.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    evidence_id: str
+    pointer: FieldPath
+    quoted_text: str
+
+
+class LineRefCitation(BaseModel):
+    """A line-indexed-text citation: the model selects one or more pre-issued ``"ref"`` ids
+    (``model_input.make_line_ref``) instead of constructing a ``LineRange`` and transcribing
+    ``quoted_text`` itself. ``evidence_id`` is the model's own explicit claim about which
+    evidence this citation is about -- checked against what the references actually resolve
+    to, never trusted on its own (see ``_resolve_line_citation``).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    evidence_id: str
+    refs: list[str] = Field(min_length=1)
+
+
 class RawHypothesisCandidate(BaseModel):
     """The untrusted shape the model is asked to produce.
 
@@ -54,15 +98,92 @@ class RawHypothesisCandidate(BaseModel):
     ``make_ai_hypothesis_finding``, never model-assigned (docs/phase-0.11-ai-hypothesis-layer-
     design.md §3.2) -- there is nothing for a model response to fill in that could impersonate
     a deterministic finding or claim a false identity.
+
+    ``evidence_locators`` (structured/``field_path`` only) and ``line_citations``
+    (line-indexed text only, by reference) are two independent channels -- a candidate may use
+    either, both, or neither (an empty candidate is simply rejected downstream for having no
+    evidence at all, exactly as before this increment).
     """
 
     model_config = ConfigDict(frozen=True)
 
     statement: str
-    evidence_locators: list[EvidenceLocator]
+    evidence_locators: list[FieldPathCitation] = Field(default_factory=list)
+    line_citations: list[LineRefCitation] = Field(default_factory=list)
     confidence: Confidence
     limitation: str | None = None
     contradicts: list[str] | None = None
+
+
+def _build_ref_catalog(model_input: dict) -> dict[str, tuple[str, int, str]]:
+    """Rebuild the ref -> (evidence_id, line, text) catalog from the exact model input that
+    was actually sent to the model. Never re-derives anything from the real EvidenceBundle
+    directly -- a reference resolves to precisely what the model was shown (already redacted,
+    already truncated), which is the only thing a selection of it can honestly mean.
+    """
+    catalog: dict[str, tuple[str, int, str]] = {}
+    for evidence_id, entry in model_input.get("evidence", {}).items():
+        payload = entry.get("payload")
+        if isinstance(payload, dict) and "lines" in payload:
+            for line_entry in payload["lines"]:
+                ref = line_entry.get("ref")
+                if ref is not None:
+                    catalog[ref] = (evidence_id, line_entry["line"], line_entry["text"])
+    return catalog
+
+
+def _resolve_line_citation(
+    citation: LineRefCitation, catalog: dict[str, tuple[str, int, str]]
+) -> EvidenceLocator:
+    """Turn a reference selection into a real ``EvidenceLocator`` -- the only place
+    ``quoted_text`` for a line-indexed citation comes from code, never the model. Every
+    reference id is treated as untrusted input: unknown, cross-item, duplicated, or
+    non-contiguous selections are all rejected outright, never repaired or substituted.
+    """
+    resolved: list[tuple[int, str]] = []
+    for ref in citation.refs:
+        entry = catalog.get(ref)
+        if entry is None:
+            raise UnknownCitationReferenceError(ref)
+        actual_evidence_id, line, text = entry
+        if actual_evidence_id != citation.evidence_id:
+            raise CitationReferenceEvidenceMismatchError(ref, citation.evidence_id, actual_evidence_id)
+        resolved.append((line, text))
+
+    lines_selected = [line for line, _ in resolved]
+    if len(lines_selected) != len(set(lines_selected)):
+        raise MalformedCitationReferenceSelectionError(citation.refs, "duplicate line in selection")
+
+    resolved.sort(key=lambda pair: pair[0])
+    sorted_lines = [line for line, _ in resolved]
+    if sorted_lines != list(range(sorted_lines[0], sorted_lines[-1] + 1)):
+        raise MalformedCitationReferenceSelectionError(
+            citation.refs, "selected lines are not a contiguous, ascending run"
+        )
+
+    quoted_text = "\n".join(text for _, text in resolved)
+    return EvidenceLocator(
+        evidence_id=citation.evidence_id,
+        pointer=LineRange(start_line=sorted_lines[0], end_line=sorted_lines[-1]),
+        quoted_text=quoted_text,
+    )
+
+
+def _resolve_candidate_locators(
+    candidate: RawHypothesisCandidate, catalog: dict[str, tuple[str, int, str]]
+) -> list[EvidenceLocator]:
+    """Combine both citation channels into the single, real ``EvidenceLocator`` list a
+    ``Finding`` actually carries. Raises on the first invalid ``line_citations`` entry --
+    caught by the same per-candidate ``try/except`` ``generate_ai_hypotheses`` already uses
+    for every other rejection reason, so a bad reference drops the whole candidate exactly
+    like an unknown evidence_id or a quote mismatch always has.
+    """
+    locators = [
+        EvidenceLocator(evidence_id=fp.evidence_id, pointer=fp.pointer, quoted_text=fp.quoted_text)
+        for fp in candidate.evidence_locators
+    ]
+    locators.extend(_resolve_line_citation(lc, catalog) for lc in candidate.line_citations)
+    return locators
 
 
 def parse_candidates(raw_response: str) -> list[RawHypothesisCandidate]:
@@ -92,8 +213,13 @@ def parse_candidates(raw_response: str) -> list[RawHypothesisCandidate]:
     return candidates
 
 
-def make_ai_hypothesis_finding(candidate: RawHypothesisCandidate, model_identifier: str) -> Finding:
-    """Promote one parsed candidate into a real Finding.
+def make_ai_hypothesis_finding(
+    candidate: RawHypothesisCandidate, model_identifier: str, resolved_locators: list[EvidenceLocator]
+) -> Finding:
+    """Promote one parsed candidate into a real Finding, given its already-resolved
+    ``EvidenceLocator`` list (``_resolve_candidate_locators`` -- both citation channels
+    combined; a line-indexed-text reference has already become a real ``LineRange`` +
+    code-derived ``quoted_text`` by this point, never the model's own transcription).
 
     ``kind``/``id``/``produced_by`` are assigned here, by code -- ``RawHypothesisCandidate``
     has no such fields to read them from in the first place. ``id`` is derived from
@@ -104,7 +230,7 @@ def make_ai_hypothesis_finding(candidate: RawHypothesisCandidate, model_identifi
     reproducible and is hashed: which model produced the hypothesis, over exactly which
     evidence, at what confidence (docs/phase-0.11-ai-hypothesis-layer-design.md §3.3).
     """
-    evidence_ids = sorted({locator.evidence_id for locator in candidate.evidence_locators})
+    evidence_ids = sorted({locator.evidence_id for locator in resolved_locators})
     digest = content_hash(
         {
             "produced_by": model_identifier,
@@ -116,7 +242,7 @@ def make_ai_hypothesis_finding(candidate: RawHypothesisCandidate, model_identifi
         id=f"finding:{digest}",
         kind=FindingKind.AI_HYPOTHESIS,
         statement=candidate.statement,
-        evidence_locators=candidate.evidence_locators,
+        evidence_locators=resolved_locators,
         produced_by=model_identifier,
         limitation=candidate.limitation,
         confidence=candidate.confidence,
@@ -207,9 +333,11 @@ def generate_ai_hypotheses(
     ``model_input.build_model_input``'s docstring). Omitting it is equivalent to no recorded
     contradictions, not an error.
 
-    A candidate that fails ``Finding`` construction (e.g. no evidence_locators),
-    ``validate_finding_references`` (e.g. an unknown evidence id, an out-of-bounds pointer, a
-    stale quote), quotes a Finding's own rendered statement instead of real evidence content
+    A candidate that fails reference resolution (``_resolve_candidate_locators`` -- an unknown,
+    cross-item, duplicated, or non-contiguous ``line_citations`` selection), ``Finding``
+    construction (e.g. no evidence_locators at all), ``validate_finding_references`` (e.g. an
+    unknown evidence id, an out-of-bounds pointer, a stale quote), quotes a Finding's own
+    rendered statement instead of real evidence content
     (``_check_quote_not_a_finding_statement``), a HIGH confidence claim with no deterministic
     grounding (``_check_confidence_requires_deterministic_grounding``), or citing contested
     evidence with no acknowledgement (``_check_contradiction_acknowledged``) is dropped
@@ -225,12 +353,14 @@ def generate_ai_hypotheses(
     model_input = build_model_input(bundle, findings, contradictions=contradictions)
     raw_response = client.generate(model_input)
     candidates = parse_candidates(raw_response)
+    catalog = _build_ref_catalog(model_input)
 
     accepted: list[Finding] = []
     seen: set[tuple[str, frozenset[str]]] = set()
     for candidate in candidates:
         try:
-            finding = make_ai_hypothesis_finding(candidate, model_identifier)
+            resolved_locators = _resolve_candidate_locators(candidate, catalog)
+            finding = make_ai_hypothesis_finding(candidate, model_identifier, resolved_locators)
             # Checked before the generic content-match gate so this specific, diagnosable
             # mistake is reported precisely rather than falling through to a generic
             # mismatch -- it would fail that gate anyway (see the function's own docstring),

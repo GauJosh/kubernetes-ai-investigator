@@ -126,9 +126,8 @@ def test_non_present_evidence_has_no_citable_key():
 def test_quoting_a_findings_statement_verbatim_raises_the_specific_error():
     pod = _pod_item()
     observed = _observed_fact(pod)
-    candidate_finding = make_ai_hypothesis_finding(
-        _CandidateStub(pod.id, _CONTAINER_STATE_STATEMENT), "model:test@v1"
-    )
+    stub = _CandidateStub(pod.id, _CONTAINER_STATE_STATEMENT)
+    candidate_finding = make_ai_hypothesis_finding(stub, "model:test@v1", stub.evidence_locators)
     with pytest.raises(FindingStatementCitedAsEvidenceError):
         _check_quote_not_a_finding_statement(candidate_finding, [observed])
 
@@ -136,9 +135,8 @@ def test_quoting_a_findings_statement_verbatim_raises_the_specific_error():
 def test_quoting_the_real_raw_value_does_not_raise():
     pod = _pod_item()
     observed = _observed_fact(pod)
-    candidate_finding = make_ai_hypothesis_finding(
-        _CandidateStub(pod.id, _REAL_REASON_VALUE), "model:test@v1"
-    )
+    stub = _CandidateStub(pod.id, _REAL_REASON_VALUE)
+    candidate_finding = make_ai_hypothesis_finding(stub, "model:test@v1", stub.evidence_locators)
     _check_quote_not_a_finding_statement(candidate_finding, [observed])  # must not raise
 
 
