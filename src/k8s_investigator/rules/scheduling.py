@@ -382,36 +382,140 @@ def _schedulable(node_items: list[EvidenceItem]) -> list[EvidenceItem]:
 
 
 # --- R9: Pod anti-affinity conflict --------------------------------------------------------------
+#
+# Completed (R9 follow-up, docs/research/read-only-access-matrix.md §8): now correlates against
+# actual sibling-Pod placement, collected via a Pod LIST scoped to the owning ReplicaSet's own
+# selector. A DETERMINISTIC_FINDING requires real, positive evidence at every step -- ownership
+# resolved, a usable selector, sibling data actually collected, and at least one sibling placed
+# on a currently-known-schedulable node. Any missing link abstains with the specific reason,
+# per the same discipline as every other rule in this bank; the scheduler's event message alone
+# is never treated as sufficient on its own.
 
 
 def _evaluate_r9(pod: EvidenceItem, event: EvidenceItem, rel) -> list[Finding]:
-    """Deliberately scoped down: the full correlation this rule's design calls for (confirming
-    *which* sibling pods already occupy *which* nodes) requires listing sibling Pods by label
-    selector -- a Pod LIST capability this milestone does not add (only Node/PersistentVolume/
-    PersistentVolumeClaim were authorized). This is flagged explicitly, not silently worked
-    around: the rule reports what the approved evidence (the event + Node data) can confirm --
-    that schedulable node capacity exists but the pod remains unscheduled -- as an OBSERVED_FACT,
-    not a confident DETERMINISTIC_FINDING, and names the missing capability by name."""
     event_loc = field_locator(event, "message")
-    schedulable = _schedulable(rel.node_items)
-    statement = (
-        "The scheduler reported a pod anti-affinity conflict. "
-        f"{len(schedulable)} known schedulable node(s) exist, but this project does not "
-        "collect sibling-pod placement (would require a Pod LIST-by-label-selector call, not "
-        "part of this milestone's approved evidence set), so which node(s) already host a "
-        "conflicting sibling cannot be independently confirmed from the evidence collected."
-    )
+
+    if rel.replica_set_item is None or rel.replica_set_item.status != EvidenceStatus.PRESENT:
+        return [
+            make_finding(
+                kind=FindingKind.OBSERVED_FACT,
+                statement=(
+                    "The scheduler reported a pod anti-affinity conflict, but the owning "
+                    "ReplicaSet could not be read, so the selector that defines 'sibling' for "
+                    "this workload is unknown -- the conflict cannot be independently "
+                    "confirmed from the evidence collected."
+                ),
+                produced_by="rule:R9_replica_set_unavailable",
+                locators=[event_loc],
+            )
+        ]
+
+    rs_selector = (rel.replica_set_item.payload or {}).get("spec", {}).get("selector") or {}
+    if not rs_selector.get("matchLabels") and not rs_selector.get("matchExpressions"):
+        return [
+            make_finding(
+                kind=FindingKind.OBSERVED_FACT,
+                statement=(
+                    "The scheduler reported a pod anti-affinity conflict, but the owning "
+                    "ReplicaSet has no usable selector (no matchLabels or matchExpressions), "
+                    "so sibling pods cannot be identified."
+                ),
+                produced_by="rule:R9_no_selector",
+                locators=[event_loc, field_locator(rel.replica_set_item, "metadata", "name")],
+            )
+        ]
+
+    # A gap item exists both when the list call genuinely failed (UNAVAILABLE/TIMEOUT) and when
+    # it succeeded but found zero pods (NOT_FOUND) -- these are different facts and must not be
+    # conflated: only the former is "could not collect," the latter is handled below as a real,
+    # positive (if inconsistent) result.
+    if rel.sibling_pods_gap is not None and rel.sibling_pods_gap.status != EvidenceStatus.NOT_FOUND:
+        return [
+            make_finding(
+                kind=FindingKind.OBSERVED_FACT,
+                statement=(
+                    "The scheduler reported a pod anti-affinity conflict, but sibling-pod data "
+                    "could not be collected (the list call failed), so the conflict cannot be "
+                    "independently confirmed."
+                ),
+                produced_by="rule:R9_siblings_unavailable",
+                locators=[event_loc],
+            )
+        ]
+
+    if not rel.sibling_pod_items:
+        return [
+            make_finding(
+                kind=FindingKind.OBSERVED_FACT,
+                statement=(
+                    "The scheduler reported a pod anti-affinity conflict, but no sibling pods "
+                    "matching the owning ReplicaSet's selector were found -- this is itself "
+                    "inconsistent with an anti-affinity conflict (which requires an existing "
+                    "sibling), and the specific cause could not be confirmed from the evidence "
+                    "collected."
+                ),
+                produced_by="rule:R9_no_siblings_found",
+                locators=[event_loc],
+            )
+        ]
+
+    placed_siblings = [
+        s for s in rel.sibling_pod_items if (s.payload or {}).get("spec", {}).get("nodeName")
+    ]
+    if not placed_siblings:
+        return [
+            make_finding(
+                kind=FindingKind.OBSERVED_FACT,
+                statement=(
+                    f"The scheduler reported a pod anti-affinity conflict; "
+                    f"{len(rel.sibling_pod_items)} sibling pod(s) matching the selector were "
+                    "found, but none is currently placed on any node -- the conflict cannot be "
+                    "independently confirmed from the evidence collected."
+                ),
+                produced_by="rule:R9_no_placed_siblings",
+                locators=[event_loc],
+            )
+        ]
+
+    schedulable_names = {
+        getattr(n.source_ref, "name", None) for n in _schedulable(rel.node_items)
+    }
+    occupied = [s for s in placed_siblings if (s.payload or {}).get("spec", {}).get("nodeName") in schedulable_names]
+
+    if occupied:
+        locators = [event_loc] + [field_locator(s, "spec", "nodeName") for s in occupied]
+        occupied_nodes = sorted({(s.payload or {}).get("spec", {}).get("nodeName") for s in occupied})
+        return [
+            make_finding(
+                kind=FindingKind.DETERMINISTIC_FINDING,
+                statement=(
+                    f"{len(occupied)} of {len(schedulable_names)} known schedulable node(s) "
+                    f"({occupied_nodes}) already host a sibling Pod matching the owning "
+                    "ReplicaSet's selector, consistent with the scheduler's reported pod "
+                    "anti-affinity conflict."
+                ),
+                produced_by="rule:R9_anti_affinity_confirmed",
+                locators=locators,
+                limitation=(
+                    "Confirms that a selector-matching sibling occupies a schedulable node, "
+                    "which is consistent with the reported conflict -- it does not itself "
+                    "prove the pod's specific anti-affinity term is what matched, only that "
+                    "the evidence is consistent with the scheduler's own report."
+                ),
+            )
+        ]
+
     return [
         make_finding(
             kind=FindingKind.OBSERVED_FACT,
-            statement=statement,
-            produced_by="rule:R9_anti_affinity_unconfirmed",
-            locators=[event_loc],
-            limitation=(
-                "Full confirmation of this rule, per the approved design "
-                "(docs/phase-0.8-mvp-blueprint.md §E), requires sibling-pod evidence this "
-                "milestone does not collect -- see docs/phase-0.10-milestone-2-notes.md."
+            statement=(
+                f"{len(placed_siblings)} sibling pod(s) are placed on a node, but none of "
+                "those nodes is among the known schedulable nodes (they may be cordoned, or "
+                "not among the nodes read) -- the conflict cannot be confirmed against known "
+                "candidate nodes from the evidence collected."
             ),
+            produced_by="rule:R9_siblings_not_on_known_schedulable_node",
+            locators=[event_loc] + [field_locator(s, "spec", "nodeName") for s in placed_siblings],
         )
     ]
 

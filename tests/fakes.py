@@ -41,6 +41,10 @@ class FakeKubernetesClient:
         self.persistent_volumes: list[dict[str, Any]] = []
         self.persistent_volumes_error: Exception | None = None
 
+        # R9 follow-up
+        self.sibling_pods: list[dict[str, Any]] = []
+        self.sibling_pods_error: Exception | None = None
+
     def _record(self, method: str, *args: Any, **kwargs: Any) -> None:
         self.calls.append((method, args, kwargs))
 
@@ -126,6 +130,14 @@ class FakeKubernetesClient:
         if self.persistent_volumes_error:
             raise self.persistent_volumes_error
         return self.persistent_volumes
+
+    # --- R9 follow-up ---
+
+    def list_pods_by_label_selector(self, namespace: str, label_selector: str) -> list[dict[str, Any]]:
+        self._record("list_pods_by_label_selector", namespace, label_selector)
+        if self.sibling_pods_error:
+            raise self.sibling_pods_error
+        return self.sibling_pods
 
 
 __all__ = ["FakeKubernetesClient", "ApiNotFoundError", "ApiForbiddenError", "ApiTimeoutError"]

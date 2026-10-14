@@ -8,8 +8,8 @@ revision 2.
 
 Milestone 2 extends the approved surface by exactly three methods (documented, with their
 required RBAC, in docs/research/read-only-access-matrix.md §7, written before this collector
-code was enabled) -- the six Milestone 1 methods and the three Milestone 2 methods are kept as
-separate sets below so a future reviewer can see exactly what each milestone added.
+code was enabled); the R9 follow-up adds one more (§8) -- each tier is kept as its own set below
+so a future reviewer can see exactly what each phase added.
 """
 
 from __future__ import annotations
@@ -39,7 +39,11 @@ MILESTONE_2_METHODS = {
     "list_persistent_volumes",
 }
 
-APPROVED_METHODS = MILESTONE_1_METHODS | MILESTONE_2_METHODS
+R9_FOLLOWUP_METHODS = {
+    "list_pods_by_label_selector",
+}
+
+APPROVED_METHODS = MILESTONE_1_METHODS | MILESTONE_2_METHODS | R9_FOLLOWUP_METHODS
 
 # Any of these appearing in the collector's source would mean a write, exec, attach,
 # port-forward, or eviction call exists -- none should, anywhere in this codebase.
@@ -81,6 +85,9 @@ def test_collector_only_calls_approved_methods_end_to_end():
         scenarios.r5_all_nodes_cordoned,
         scenarios.r10_pv_bound_elsewhere,
         scenarios.scheduling_blocked_nodes_unavailable,
+        scenarios.r9_anti_affinity_confirmed,
+        scenarios.r9_no_selector_on_replica_set,
+        scenarios.r9_siblings_unavailable,
     ):
         client = build_client()
         collect_and_build(client)
@@ -107,6 +114,36 @@ def test_milestone_2_calls_are_gated_not_unconditional():
     collect_and_build(client)
     called = {c[0] for c in client.calls}
     assert "list_nodes" in called
+
+
+def test_r9_followup_call_is_gated_on_usable_selector_too():
+    """docs/research/read-only-access-matrix.md §8.5: the sibling-pod call requires BOTH
+    scheduling-blocked AND a ReplicaSet with a usable selector -- not scheduling-blocked alone."""
+    for build_client in (scenarios.healthy_pod, scenarios.r1_dns_failure):
+        client = build_client()
+        collect_and_build(client)
+        assert "list_pods_by_label_selector" not in {c[0] for c in client.calls}
+
+    # scheduling-blocked, but no usable selector on the ReplicaSet -- still must not call it
+    client = scenarios.r9_no_selector_on_replica_set()
+    collect_and_build(client)
+    assert "list_pods_by_label_selector" not in {c[0] for c in client.calls}
+
+    # scheduling-blocked AND a usable selector -- now it must be called
+    client = scenarios.r9_anti_affinity_confirmed()
+    collect_and_build(client)
+    assert "list_pods_by_label_selector" in {c[0] for c in client.calls}
+
+
+def test_r9_followup_selector_is_a_query_filter_not_passed_as_rbac():
+    """docs/research/read-only-access-matrix.md §8.2: confirms the call actually receives a
+    labelSelector built from the ReplicaSet's own matchLabels -- a query argument, not any kind
+    of access-control parameter."""
+    client = scenarios.r9_anti_affinity_confirmed()
+    collect_and_build(client)
+    call = next(c for c in client.calls if c[0] == "list_pods_by_label_selector")
+    _, args, _ = call
+    assert args[1] == "app=demo-pod"
 
 
 def test_no_write_or_interactive_call_in_collector_source():

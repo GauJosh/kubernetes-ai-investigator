@@ -85,6 +85,12 @@ class KubernetesClient(Protocol):
 
     def list_persistent_volumes(self) -> list[dict[str, Any]]: ...
 
+    # --- R9 follow-up -- see docs/research/read-only-access-matrix.md §8. The label selector
+    # passed here is a query filter only, not an RBAC boundary: the required grant is `list` on
+    # `pods` in the namespace, full stop, independent of what selector any given call uses.
+
+    def list_pods_by_label_selector(self, namespace: str, label_selector: str) -> list[dict[str, Any]]: ...
+
 
 def run_call(requested: SourceRef, call) -> CollectionOutcome:
     """Run one bounded API call, translating any failure into a typed CollectionOutcome.

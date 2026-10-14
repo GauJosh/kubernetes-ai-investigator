@@ -168,3 +168,17 @@ class K8sApiCollectorClient:
             return _raw_json(resp).get("items", [])
         except Exception as exc:  # noqa: BLE001
             raise _translate_errors(exc) from exc
+
+    # --- R9 follow-up -- docs/research/read-only-access-matrix.md §8 ---
+
+    def list_pods_by_label_selector(self, namespace: str, label_selector: str) -> list[dict[str, Any]]:
+        try:
+            resp = self._core.list_namespaced_pod(
+                namespace,
+                label_selector=label_selector,
+                _preload_content=False,
+                _request_timeout=self._timeout,
+            )
+            return _raw_json(resp).get("items", [])
+        except Exception as exc:  # noqa: BLE001
+            raise _translate_errors(exc) from exc

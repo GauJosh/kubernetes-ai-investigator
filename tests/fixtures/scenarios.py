@@ -18,11 +18,17 @@ from .builders import (
     make_pvc,
     make_replica_set,
     make_service_account,
+    make_sibling_pod,
 )
 
 
-def _with_owner_chain(client: FakeKubernetesClient, *, sa_image_pull_secrets=None) -> FakeKubernetesClient:
-    client.replica_sets["demo-rs"] = make_replica_set()
+def _with_owner_chain(
+    client: FakeKubernetesClient, *, sa_image_pull_secrets=None, rs_match_labels=None, rs_unavailable=False
+) -> FakeKubernetesClient:
+    if rs_unavailable:
+        client.replica_set_errors["demo-rs"] = ApiForbiddenError("ReplicaSet is forbidden for this user")
+    else:
+        client.replica_sets["demo-rs"] = make_replica_set(match_labels=rs_match_labels)
     client.deployments["demo-deploy"] = make_deployment()
     client.service_accounts["default"] = make_service_account(image_pull_secrets=sa_image_pull_secrets)
     return client
@@ -177,13 +183,28 @@ def service_account_unavailable_but_r1_still_resolves() -> FakeKubernetesClient:
 # ============================================================================================
 
 
-def _unscheduled(c: FakeKubernetesClient, *, nodes=None, pvcs=None, pvs=None, **pod_kwargs) -> FakeKubernetesClient:
+def _unscheduled(
+    c: FakeKubernetesClient,
+    *,
+    nodes=None,
+    pvcs=None,
+    pvs=None,
+    rs_match_labels=None,
+    rs_unavailable=False,
+    sibling_pods=None,
+    sibling_pods_error=None,
+    **pod_kwargs,
+) -> FakeKubernetesClient:
     c.pod = make_pod(unscheduled=True, **pod_kwargs)
     c.nodes = nodes or []
     for pvc in (pvcs or []):
         c.persistent_volume_claims[pvc["metadata"]["name"]] = pvc
     c.persistent_volumes = pvs or []
-    return _with_owner_chain(c)
+    if sibling_pods is not None:
+        c.sibling_pods = sibling_pods
+    if sibling_pods_error is not None:
+        c.sibling_pods_error = sibling_pods_error
+    return _with_owner_chain(c, rs_match_labels=rs_match_labels, rs_unavailable=rs_unavailable)
 
 
 def r5_all_nodes_cordoned() -> FakeKubernetesClient:
@@ -314,17 +335,82 @@ def r8_neither_selector_nor_affinity_present() -> FakeKubernetesClient:
     return _unscheduled(c, nodes=[make_node(name="worker-1")])
 
 
-def r9_anti_affinity_conflict() -> FakeKubernetesClient:
+_R9_EVENT = (
+    "0/4 nodes are available: 1 node(s) were unschedulable, 3 node(s) didn't match pod "
+    "anti-affinity rules."
+)
+_R9_NODES = [make_node(name="master", cordoned=True)] + [make_node(name=f"worker-{i}") for i in range(3)]
+
+
+def r9_no_selector_on_replica_set() -> FakeKubernetesClient:
+    """The owning ReplicaSet exists but has no selector at all -- genuinely missing evidence,
+    not a collection failure."""
     c = FakeKubernetesClient()
-    c.events = [
-        make_event(
-            "0/4 nodes are available: 1 node(s) were unschedulable, 3 node(s) didn't match pod anti-affinity rules.",
-            reason="FailedScheduling",
-        )
-    ]
+    c.events = [make_event(_R9_EVENT, reason="FailedScheduling")]
+    return _unscheduled(c, nodes=_R9_NODES)  # rs_match_labels=None -- no selector, by default
+
+
+def r9_replica_set_unavailable() -> FakeKubernetesClient:
+    """Missing evidence: the owning ReplicaSet itself could not be read."""
+    c = FakeKubernetesClient()
+    c.events = [make_event(_R9_EVENT, reason="FailedScheduling")]
+    return _unscheduled(c, nodes=_R9_NODES, rs_unavailable=True)
+
+
+def r9_siblings_unavailable() -> FakeKubernetesClient:
+    """Partial collection failure: the selector is known, but the sibling-pod LIST call itself
+    failed."""
+    c = FakeKubernetesClient()
+    c.events = [make_event(_R9_EVENT, reason="FailedScheduling")]
     return _unscheduled(
-        c,
-        nodes=[make_node(name="master", cordoned=True)] + [make_node(name=f"worker-{i}") for i in range(3)],
+        c, nodes=_R9_NODES, rs_match_labels={"app": "demo-pod"},
+        sibling_pods_error=ApiForbiddenError("pods is forbidden for this user"),
+    )
+
+
+def r9_no_siblings_found() -> FakeKubernetesClient:
+    """The selector is known and the LIST call succeeded, but it found zero matching pods --
+    itself inconsistent with an anti-affinity conflict."""
+    c = FakeKubernetesClient()
+    c.events = [make_event(_R9_EVENT, reason="FailedScheduling")]
+    return _unscheduled(c, nodes=_R9_NODES, rs_match_labels={"app": "demo-pod"}, sibling_pods=[])
+
+
+def r9_siblings_not_placed() -> FakeKubernetesClient:
+    """Sibling pods matching the selector exist, but none has a node assigned yet."""
+    c = FakeKubernetesClient()
+    c.events = [make_event(_R9_EVENT, reason="FailedScheduling")]
+    return _unscheduled(
+        c, nodes=_R9_NODES, rs_match_labels={"app": "demo-pod"},
+        sibling_pods=[
+            make_sibling_pod(name="demo-sibling-1", labels={"app": "demo-pod"}, node_name=None, phase="Pending")
+        ],
+    )
+
+
+def r9_siblings_not_on_known_schedulable_node() -> FakeKubernetesClient:
+    """A sibling is placed, but on a node this project has no record of as schedulable (e.g.
+    a node outside the known/cordoned set) -- cannot confirm against known candidates."""
+    c = FakeKubernetesClient()
+    c.events = [make_event(_R9_EVENT, reason="FailedScheduling")]
+    return _unscheduled(
+        c, nodes=_R9_NODES, rs_match_labels={"app": "demo-pod"},
+        sibling_pods=[
+            make_sibling_pod(name="demo-sibling-1", labels={"app": "demo-pod"}, node_name="unknown-node-99")
+        ],
+    )
+
+
+def r9_anti_affinity_confirmed() -> FakeKubernetesClient:
+    """The positive case: a sibling matching the ReplicaSet's own selector is placed on a
+    known schedulable node -- consistent with the scheduler's reported conflict."""
+    c = FakeKubernetesClient()
+    c.events = [make_event(_R9_EVENT, reason="FailedScheduling")]
+    return _unscheduled(
+        c, nodes=_R9_NODES, rs_match_labels={"app": "demo-pod"},
+        sibling_pods=[
+            make_sibling_pod(name="demo-sibling-1", labels={"app": "demo-pod"}, node_name="worker-0")
+        ],
     )
 
 

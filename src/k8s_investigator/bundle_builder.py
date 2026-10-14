@@ -22,19 +22,42 @@ from .models.evidence import (
 from .models.refs import ApiCallRef, ObjectRef, TimestampValue
 from .timeline import expiry_note, is_plausibly_expired, tag
 
+def _project_sibling_pod_fields(raw_pod: dict[str, Any]) -> dict[str, Any]:
+    """R9 follow-up (docs/research/read-only-access-matrix.md §8.3): retain only the fields
+    R9's correlation actually needs from a sibling-Pod list entry -- not the full object every
+    other call in this project keeps. The investigated Pod's own object (fetched separately)
+    is never projected -- only entries from the sibling-list call are."""
+    metadata = raw_pod.get("metadata", {})
+    return {
+        "metadata": {
+            "name": metadata.get("name"),
+            "namespace": metadata.get("namespace"),
+            "uid": metadata.get("uid"),
+            "labels": metadata.get("labels"),
+            "ownerReferences": metadata.get("ownerReferences"),
+            "resourceVersion": metadata.get("resourceVersion"),
+        },
+        "spec": {"nodeName": raw_pod.get("spec", {}).get("nodeName")},
+        "status": {"phase": raw_pod.get("status", {}).get("phase")},
+    }
+
+
 #: Every LIST-shaped call this collector makes, keyed by the final path segment -- its payload
 #: is a *list* of raw objects and must be split into one EvidenceItem per entry, unlike every
-#: other (single-object) call. (api_group, api_version, kind, apply_expiry_heuristic). Only the
-#: events list gets the plausible-expiry heuristic (docs/research/event-timeline-contract.md) --
-#: an empty Node or PersistentVolume list has no TTL-eviction concept to flag.
-_LIST_CALL_SHAPES: dict[str, tuple[str, str, str, bool]] = {
-    "events": ("", "v1", "Event", True),
-    "nodes": ("", "v1", "Node", False),
-    "persistentvolumes": ("", "v1", "PersistentVolume", False),
+#: other (single-object) call. (api_group, api_version, kind, apply_expiry_heuristic, projector).
+#: Only the events list gets the plausible-expiry heuristic
+#: (docs/research/event-timeline-contract.md) -- an empty Node or PersistentVolume list has no
+#: TTL-eviction concept to flag. Only the sibling-Pod list gets a projector -- every other list
+#: call retains the full raw entry.
+_LIST_CALL_SHAPES: dict[str, tuple[str, str, str, bool, Any]] = {
+    "events": ("", "v1", "Event", True, None),
+    "nodes": ("", "v1", "Node", False, None),
+    "persistentvolumes": ("", "v1", "PersistentVolume", False, None),
+    "pods": ("", "v1", "Pod", False, _project_sibling_pod_fields),
 }
 
 
-def _list_shape_for_ref(ref: Any) -> tuple[str, str, str, bool] | None:
+def _list_shape_for_ref(ref: Any) -> tuple[str, str, str, bool, Any] | None:
     if not (isinstance(ref, ApiCallRef) and ref.verb == "list"):
         return None
     last_segment = ref.path.rstrip("/").rsplit("/", 1)[-1]
@@ -95,7 +118,7 @@ def _items_from_outcome(
     ref = outcome.requested
     list_shape = _list_shape_for_ref(ref)
     if list_shape is not None:
-        api_group, api_version, kind, apply_expiry_heuristic = list_shape
+        api_group, api_version, kind, apply_expiry_heuristic, projector = list_shape
         entries = outcome.payload or []
         if not entries:
             return [
@@ -104,7 +127,10 @@ def _items_from_outcome(
                 )
             ]
         return [
-            _list_entry_item(entry, api_group, api_version, kind, collected_at)
+            _list_entry_item(
+                projector(entry) if projector else entry,
+                api_group, api_version, kind, collected_at,
+            )
             for entry in entries
         ]
 

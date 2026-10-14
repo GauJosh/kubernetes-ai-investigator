@@ -9,6 +9,12 @@ Milestone 1 resolved only the owner chain and the ServiceAccount link. Milestone
 PersistentVolume, and PersistentVolumeClaim classification for the Scheduling-fault rules
 (R5-R10) -- still pure, still no timestamps, and still just classification: whether a given
 node/PV/PVC *supports* a rule's claim is R5-R10's own job (rules/engine.py), not this module's.
+
+The R9 follow-up adds sibling-Pod classification. Both the investigated Pod and its siblings
+carry ``kind == "Pod"`` (they are all, genuinely, Pod objects) -- they are told apart by
+comparing each item's ``source_ref`` against ``bundle.investigation_target``, never by which
+API call happened to produce the item, since the sibling-list query can legitimately return
+the investigated Pod itself too (it matches its own ReplicaSet's selector).
 """
 
 from __future__ import annotations
@@ -39,6 +45,11 @@ class RelationshipFacts:
     persistent_volume_claims_by_name: dict[str, EvidenceItem] = field(default_factory=dict)
     persistent_volume_claim_gaps: list[EvidenceItem] = field(default_factory=list)
 
+    # R9 follow-up -- populated only when §8.5's gate (scheduling-blocked AND a usable
+    # ReplicaSet selector) fired during collection; empty/None otherwise.
+    sibling_pod_items: list[EvidenceItem] = field(default_factory=list)
+    sibling_pods_gap: EvidenceItem | None = None
+
 
 def _ref_kind(item: EvidenceItem) -> str | None:
     return item.source_ref.kind if isinstance(item.source_ref, ObjectRef) else None
@@ -66,11 +77,18 @@ def resolve_relationships(bundle: EvidenceBundle) -> RelationshipFacts:
     pvs_gap: EvidenceItem | None = None
     pvcs: dict[str, EvidenceItem] = {}
     pvc_gaps: list[EvidenceItem] = []
+    siblings: list[EvidenceItem] = []
+    siblings_gap: EvidenceItem | None = None
+
+    target = bundle.investigation_target
 
     for item in bundle.items:
         kind = _ref_kind(item)
         if kind == "Pod":
-            pod_item = item
+            if _is_investigated_pod(item, target):
+                pod_item = item
+            else:
+                siblings.append(item)
         elif kind == "Event":
             events.append(item)
         elif kind == "ReplicaSet":
@@ -98,6 +116,11 @@ def resolve_relationships(bundle: EvidenceBundle) -> RelationshipFacts:
             and item.source_ref.path.rstrip("/").endswith("/persistentvolumes")
         ):
             pvs_gap = item
+        elif (
+            isinstance(item.source_ref, ApiCallRef)
+            and item.source_ref.path.rstrip("/").endswith("/pods")
+        ):
+            siblings_gap = item  # the sibling-list call itself failed or returned zero pods
 
     if pod_item is None:
         raise ValueError(
@@ -118,4 +141,15 @@ def resolve_relationships(bundle: EvidenceBundle) -> RelationshipFacts:
         persistent_volumes_gap=pvs_gap,
         persistent_volume_claims_by_name=pvcs,
         persistent_volume_claim_gaps=pvc_gaps,
+        sibling_pod_items=siblings,
+        sibling_pods_gap=siblings_gap,
+    )
+
+
+def _is_investigated_pod(item: EvidenceItem, target: ObjectRef) -> bool:
+    ref = item.source_ref
+    return (
+        isinstance(ref, ObjectRef)
+        and ref.namespace == target.namespace
+        and ref.name == target.name
     )

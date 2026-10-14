@@ -5,17 +5,18 @@ snapshot of a Pod's evidence, correlates it deterministically, and produces a re
 findings are always traceable to specific, validated evidence — no AI model is required for any
 of this.
 
-**Current scope: Milestone 2.** Rules R1–R4 diagnose Startup-fault–category failures (image
-pull: DNS failure, tag/reference not found, registry authorization failure; and a bounded,
-log-assisted crash-diagnosis rule with an explicit "insufficient evidence" outcome) from
-namespace-scoped evidence only. Rules R5–R10 diagnose Scheduling-fault–category failures (node
-cordon, resource capacity, taint/toleration, node selector/affinity, pod anti-affinity, unbound
-PersistentVolumeClaim) for Pods that are `Pending` and unscheduled, using `Node`/
-`PersistentVolume`/`PersistentVolumeClaim` evidence collected **only** when that scheduling-blocked
-condition is already visible on the Pod itself. See `docs/phase-0.8-mvp-blueprint.md` for the
-approved architecture, `docs/phase-0.9-milestone-1-notes.md` for Milestone 1, and
-`docs/phase-0.10-milestone-2-notes.md` for Milestone 2 — including one flagged, unresolved
-design question (R9's scope, §2 of that document).
+**Current scope: Milestone 2 (complete, including the R9 follow-up).** Rules R1–R4 diagnose
+Startup-fault–category failures (image pull: DNS failure, tag/reference not found, registry
+authorization failure; and a bounded, log-assisted crash-diagnosis rule with an explicit
+"insufficient evidence" outcome) from namespace-scoped evidence only. Rules R5–R10 diagnose
+Scheduling-fault–category failures (node cordon, resource capacity, taint/toleration, node
+selector/affinity, pod anti-affinity — now confirmed against real sibling-Pod placement, not
+just the scheduler's message — unbound PersistentVolumeClaim) for Pods that are `Pending` and
+unscheduled, using `Node`/`PersistentVolume`/`PersistentVolumeClaim`/sibling-`Pod` evidence
+collected **only** when that scheduling-blocked condition (and, for siblings, a usable
+ReplicaSet selector) is already visible on the Pod's own evidence. See
+`docs/phase-0.8-mvp-blueprint.md` for the approved architecture, `docs/phase-0.9-milestone-1-notes.md`
+for Milestone 1, and `docs/phase-0.10-milestone-2-notes.md` for Milestone 2 and the R9 follow-up.
 
 **This is a design-and-research project's first working slice, not a production tool.** It is
 read-only by construction: no write, `exec`, `attach`, `port-forward`, or eviction call exists
@@ -66,14 +67,15 @@ Kubeconfig discovery follows the official Kubernetes client's normal resolution 
 config first, then the standard kubeconfig file/context lookup) — no project-specific override.
 
 **Live collection prerequisites**, per `docs/research/read-only-access-matrix.md` (approved):
-namespace-scoped `get` on `Pod`, `get` on the `pods/log` subresource, `list` on `Event`, `get` on
-`ReplicaSet`, `get` on `Deployment`, `get` on `ServiceAccount`, and `get` on
-`PersistentVolumeClaim`; plus cluster-scoped `list` on `Node` and `PersistentVolume` (§7 of that
-document — only `list` is ever called, `get` is approved but unused, and both calls are issued
-only when the investigated Pod is already `Pending` and unscheduled). **No manifest for this
-grant is created by this project** — creating the actual `Role`/`ClusterRole`/`RoleBinding`/
-`ServiceAccount` objects is a deployment-time decision outside this project's scope, per the
-approved decision record.
+namespace-scoped `get`+`list` on `Pod` (`list` is the R9-follow-up addition — §8 of that
+document; the label selector it uses is a query filter only, never an RBAC boundary), `get` on
+the `pods/log` subresource, `list` on `Event`, `get` on `ReplicaSet`, `get` on `Deployment`,
+`get` on `ServiceAccount`, and `get` on `PersistentVolumeClaim`; plus cluster-scoped `list` on
+`Node` and `PersistentVolume` (§7 — only `list` is ever called, `get` is approved but unused,
+and both calls, along with the sibling-`Pod` list, are issued only when the investigated Pod is
+already `Pending` and unscheduled). **No manifest for this grant is created by this project** —
+creating the actual `Role`/`ClusterRole`/`RoleBinding`/`ServiceAccount` objects is a
+deployment-time decision outside this project's scope, per the approved decision record.
 
 **No live cluster was accessed to build, test, or verify this milestone.** Every test in this
 repository runs against synthetic evidence bundles and a fake Kubernetes client — see Testing,
@@ -85,10 +87,6 @@ below.
   this codebase.
 - No `Secret` object is ever read. Image-pull-secret *references* (names only) are read from the
   Pod and ServiceAccount objects; their contents are never inspected.
-- **Sibling-pod placement is not collected** — R9 (pod anti-affinity) is therefore implemented in
-  a deliberately scoped-down form that does not confirm *which* node already hosts a conflicting
-  sibling; see `docs/phase-0.10-milestone-2-notes.md` §2 for the flagged design question this
-  leaves open.
 - `Service`, `EndpointSlice`, `Namespace`, and `ResourceQuota` remain deferred — no evidence
   collected in this project's testing has needed them.
 - No AI/LLM call of any kind. The deterministic pipeline is complete and useful on its own; the
@@ -105,8 +103,10 @@ below.
   claimed to cover every real-world phrasing. An unmatched case produces an honest "insufficient
   evidence" result, not a guess.
 - R8's node-affinity matching covers only the `In` operator on the first required
-  matchExpression; R9 does not confirm sibling-pod placement (see above); R6's resource-quantity
-  parser is minimal (no exponent notation).
+  matchExpression; R6's resource-quantity parser is minimal (no exponent notation); R9 confirms
+  that a selector-matching sibling occupies a schedulable node (consistent with the scheduler's
+  reported conflict), but does not independently parse the Pod's own `podAntiAffinity` term to
+  prove that specific term is what matched.
 - Container logs are treated as potentially sensitive. Collection is bounded (tail lines and a
   time window), but no automated redaction is applied — redaction is explicitly a secondary
   safeguard, never a security boundary, per `docs/research/read-only-access-matrix.md` §4. Do not
@@ -143,17 +143,19 @@ src/k8s_investigator/
   validation.py    evidence-reference and bundle-integrity validation
   timeline.py      event-timeline interpretation (TTL/expiry flagging, timestamp tagging)
   pod_status.py    the scheduling-blocked predicate shared by the collector and rule engine
+  selectors.py     builds a label-selector query string from a ReplicaSet's own spec.selector
+                   (a query filter only -- never an RBAC boundary, see matrix §8.2)
   graph.py         structural relationship resolution (owner chain, ServiceAccount link,
-                   Node/PersistentVolume/PersistentVolumeClaim classification)
+                   Node/PersistentVolume/PersistentVolumeClaim/sibling-Pod classification)
   rules/
     engine.py        R1-R4 (Startup-fault) and wiring for R5-R10
-    scheduling.py     R5-R10 (Scheduling-fault)
+    scheduling.py     R5-R10 (Scheduling-fault, including R9's sibling-Pod correlation)
     contradictions.py  the two contradiction detectors
     patterns.py        the named, non-exhaustive substring/quantity-parsing rule bank
   bundle_builder.py   collector output -> typed, content-hashed EvidenceBundle
   report_builder.py   validated findings -> InvestigationReport
   rendering.py     human-readable report rendering
-  collector/       the narrow, nine-call-surface Kubernetes client and orchestration
+  collector/       the narrow, ten-call-surface Kubernetes client and orchestration
   cli.py           `investigate pod <name> ...`
 tests/             synthetic fixtures + a fake Kubernetes client; no live cluster
 docs/              the full research, design, and decision record for this project
@@ -165,5 +167,5 @@ The complete research and design history lives in `docs/` — `docs/open-questio
 material decision's status (approved / recommended / open / deferred);
 `docs/phase-0.8-mvp-blueprint.md` is the approved architecture; `docs/phase-0.9-milestone-1-notes.md`
 and `docs/phase-0.10-milestone-2-notes.md` record what each milestone actually built, deviated
-on, and tested; `docs/research/read-only-access-matrix.md` §7 documents the exact Milestone 2
+on, and tested; `docs/research/read-only-access-matrix.md` §7-§8 documents the exact Milestone 2
 API calls and RBAC.

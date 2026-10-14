@@ -141,20 +141,87 @@ def test_r8_abstains_when_no_requirement_found_on_pod():
     assert len(matching) == 1
 
 
-# --- R9: Pod anti-affinity conflict (deliberately scoped down) ----------------------------------
+# --- R9: Pod anti-affinity conflict (completed -- R9 follow-up) ---------------------------------
 
 
-def test_r9_does_not_overclaim_without_sibling_pod_evidence():
-    """R9 is deliberately NOT a confident DETERMINISTIC_FINDING in this milestone -- full
-    confirmation requires sibling-pod placement evidence this milestone does not collect
-    (see docs/phase-0.10-milestone-2-notes.md). This test locks in that honesty, not a gap."""
-    bundle = collect_and_build(scenarios.r9_anti_affinity_conflict())
+def test_r9_confirmed_when_sibling_occupies_known_schedulable_node():
+    """The positive case: now a confident DETERMINISTIC_FINDING, grounded in real sibling-pod
+    placement evidence, not the scheduler's message alone."""
+    bundle = collect_and_build(scenarios.r9_anti_affinity_confirmed())
+    findings, _ = evaluate_bundle(bundle)
+    det = [f for f in _deterministic(findings) if f.produced_by == "rule:R9_anti_affinity_confirmed"]
+    assert len(det) == 1
+    assert "worker-0" in det[0].statement
+    # the evidence must include the sibling's own nodeName field, not just the event
+    assert len(det[0].evidence_locators) >= 2
+
+
+def test_r9_abstains_without_replica_set():
+    """Missing evidence: ownership (the selector source) could not be read."""
+    bundle = collect_and_build(scenarios.r9_replica_set_unavailable())
     findings, _ = evaluate_bundle(bundle)
     assert _deterministic(findings) == []
-    matching = [f for f in _observed(findings) if f.produced_by == "rule:R9_anti_affinity_unconfirmed"]
+    matching = [f for f in _observed(findings) if f.produced_by == "rule:R9_replica_set_unavailable"]
     assert len(matching) == 1
-    assert matching[0].limitation is not None
-    assert "sibling-pod" in matching[0].limitation
+
+
+def test_r9_abstains_without_usable_selector():
+    bundle = collect_and_build(scenarios.r9_no_selector_on_replica_set())
+    findings, _ = evaluate_bundle(bundle)
+    assert _deterministic(findings) == []
+    matching = [f for f in _observed(findings) if f.produced_by == "rule:R9_no_selector"]
+    assert len(matching) == 1
+
+
+def test_r9_abstains_when_sibling_collection_fails():
+    """Partial collection failure: the selector is known, but the LIST call itself failed."""
+    bundle = collect_and_build(scenarios.r9_siblings_unavailable())
+    findings, _ = evaluate_bundle(bundle)
+    assert _deterministic(findings) == []
+    matching = [f for f in _observed(findings) if f.produced_by == "rule:R9_siblings_unavailable"]
+    assert len(matching) == 1
+
+
+def test_r9_flags_inconsistency_when_no_siblings_found():
+    """Zero matching siblings is itself inconsistent with an anti-affinity conflict claim --
+    must be named as such, not silently treated as 'confirmed' or 'unknown.'"""
+    bundle = collect_and_build(scenarios.r9_no_siblings_found())
+    findings, _ = evaluate_bundle(bundle)
+    assert _deterministic(findings) == []
+    matching = [f for f in _observed(findings) if f.produced_by == "rule:R9_no_siblings_found"]
+    assert len(matching) == 1
+    assert "inconsistent" in matching[0].statement
+
+
+def test_r9_abstains_when_no_sibling_is_placed():
+    bundle = collect_and_build(scenarios.r9_siblings_not_placed())
+    findings, _ = evaluate_bundle(bundle)
+    assert _deterministic(findings) == []
+    matching = [f for f in _observed(findings) if f.produced_by == "rule:R9_no_placed_siblings"]
+    assert len(matching) == 1
+
+
+def test_r9_abstains_when_sibling_on_unknown_node():
+    """A sibling is placed, but not on any node this project has evidence about as
+    schedulable -- must not be silently counted as confirming or refuting the conflict."""
+    bundle = collect_and_build(scenarios.r9_siblings_not_on_known_schedulable_node())
+    findings, _ = evaluate_bundle(bundle)
+    assert _deterministic(findings) == []
+    matching = [f for f in _observed(findings) if f.produced_by == "rule:R9_siblings_not_on_known_schedulable_node"]
+    assert len(matching) == 1
+
+
+def test_r9_evidence_locators_cite_sibling_node_name_field():
+    """The evidence-first requirement, explicit: a confirmed R9 finding's locators must
+    resolve to real, validated fields on the actual sibling-pod evidence item, not just the
+    triggering event."""
+    bundle = collect_and_build(scenarios.r9_anti_affinity_confirmed())
+    findings, _ = evaluate_bundle(bundle)
+    det = [f for f in _deterministic(findings) if f.produced_by == "rule:R9_anti_affinity_confirmed"][0]
+    from k8s_investigator.validation import validate_finding_references
+    validate_finding_references(det, bundle)  # must not raise
+    node_name_locators = [loc for loc in det.evidence_locators if loc.quoted_text == "worker-0"]
+    assert len(node_name_locators) == 1
 
 
 # --- R10: PV binding occupied --------------------------------------------------------------------

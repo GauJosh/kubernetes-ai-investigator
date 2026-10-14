@@ -12,6 +12,10 @@ document) are gated, not unconditional: they are only attempted when the Pod's o
 already shows a scheduling-blocked signal (``phase == "Pending"`` and a ``PodScheduled: False``
 condition). A healthy or already-running pod's investigation never issues the two cluster-scoped
 list calls at all.
+
+The R9 follow-up (sibling Pods, matrix §8) is gated further still: scheduling-blocked AND the
+owning ReplicaSet was read AND it has a usable selector -- otherwise there is nothing to query
+siblings by.
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ from __future__ import annotations
 from ..models.evidence import CollectionOutcome, CollectionStatus
 from ..models.refs import ApiCallRef, ObjectRef
 from ..pod_status import is_scheduling_blocked
+from ..selectors import build_label_selector_string
 from .client import (
     DEFAULT_LOG_SINCE_SECONDS,
     DEFAULT_LOG_TAIL_LINES,
@@ -146,5 +151,20 @@ def collect_pod_evidence(
         if pvc_names:
             pv_ref = ApiCallRef(verb="list", path="/api/v1/persistentvolumes", params={})
             outcomes.append(run_call(pv_ref, lambda: k8s.list_persistent_volumes()))
+
+        # Sibling Pods -- R9 follow-up (docs/research/read-only-access-matrix.md §8). Only
+        # when the owning ReplicaSet was read and has a usable selector; the selector is a
+        # query filter, never an RBAC boundary (§8.2).
+        if rs_payload is not None:
+            selector_string = build_label_selector_string(rs_payload.get("spec", {}).get("selector"))
+            if selector_string:
+                siblings_ref = ApiCallRef(
+                    verb="list",
+                    path=f"/api/v1/namespaces/{namespace}/pods",
+                    params={"labelSelector": selector_string},
+                )
+                outcomes.append(
+                    run_call(siblings_ref, lambda s=selector_string: k8s.list_pods_by_label_selector(namespace, s))
+                )
 
     return outcomes

@@ -167,15 +167,54 @@ def make_event(
 
 
 def make_replica_set(
-    *, name: str = "demo-rs", namespace: str = "demo-ns", owner_deploy_name: str | None = "demo-deploy"
+    *,
+    name: str = "demo-rs",
+    namespace: str = "demo-ns",
+    owner_deploy_name: str | None = "demo-deploy",
+    match_labels: dict[str, str] | None = None,
+    uid: str = "rs-uid-1",
 ) -> dict[str, Any]:
     owner_refs = []
     if owner_deploy_name:
         owner_refs.append({"kind": "Deployment", "name": owner_deploy_name, "controller": True, "uid": "d-uid-1"})
+    spec: dict[str, Any] = {}
+    if match_labels:
+        spec["selector"] = {"matchLabels": match_labels}
     return {
         "apiVersion": "apps/v1",
         "kind": "ReplicaSet",
-        "metadata": {"name": name, "namespace": namespace, "ownerReferences": owner_refs},
+        "metadata": {"name": name, "namespace": namespace, "uid": uid, "ownerReferences": owner_refs},
+        "spec": spec,
+    }
+
+
+def make_sibling_pod(
+    *,
+    name: str,
+    namespace: str = "demo-ns",
+    labels: dict[str, str] | None = None,
+    node_name: str | None = None,
+    owner_rs_name: str | None = "demo-rs",
+    owner_rs_uid: str = "rs-uid-1",
+    phase: str = "Running",
+) -> dict[str, Any]:
+    """A minimal raw Pod payload representing a *sibling* returned by the R9 follow-up's
+    label-selector LIST call -- deliberately smaller than make_pod() since the real collector
+    projects sibling entries down to a handful of fields before storing them
+    (docs/research/read-only-access-matrix.md §8.3); this builder mirrors a *pre-projection*
+    raw API response, and the projection itself is exercised by bundle_builder."""
+    owner_refs = []
+    if owner_rs_name:
+        owner_refs.append({"kind": "ReplicaSet", "name": owner_rs_name, "controller": True, "uid": owner_rs_uid})
+    return {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+            "name": name, "namespace": namespace, "uid": f"{name}-uid",
+            "labels": labels or {}, "ownerReferences": owner_refs, "resourceVersion": "5000",
+        },
+        "spec": {"nodeName": node_name} if node_name else {},
+        "status": {"phase": phase},
     }
 
 
