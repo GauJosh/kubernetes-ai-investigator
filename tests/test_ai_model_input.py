@@ -1,0 +1,198 @@
+"""ai.model_input.build_model_input -- reproducibility, bounding, and projection.
+
+Reuses the same synthetic bundle-building pipeline (tests/fixtures/builders.py +
+tests/fakes.py) every other test in this suite uses -- no cluster, no model call.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+import pytest
+
+from k8s_investigator.ai.model_input import DEFAULT_MAX_PAYLOAD_CHARS, build_model_input
+from k8s_investigator.canonical import content_hash
+from k8s_investigator.models.evidence import EvidenceBundle, EvidenceItem, EvidenceStatus
+from k8s_investigator.models.findings import Confidence, Finding, FindingKind
+from k8s_investigator.models.locators import EvidenceLocator, FieldPath
+from k8s_investigator.models.refs import ApiCallRef, ObjectRef, TimestampValue
+
+
+def _ts() -> TimestampValue:
+    return TimestampValue(value=datetime(2026, 10, 14, 0, 0, 0, tzinfo=timezone.utc), source_field="collectedAt")
+
+
+def _pod_item() -> EvidenceItem:
+    ref = ObjectRef(api_group="", api_version="v1", kind="Pod", namespace="ns", name="p")
+    payload = {"status": {"containerStatuses": [{"state": {"waiting": {"reason": "ErrImagePull"}}}]}}
+    return EvidenceItem(id="item-pod", source_ref=ref, collected_at=_ts(), payload=payload, status=EvidenceStatus.PRESENT)
+
+
+def _log_item(text: str = "line0\nline1 denied\nline2\n") -> EvidenceItem:
+    ref = ApiCallRef(verb="get", path="/pods/p/log", params={"container": "server"})
+    return EvidenceItem(id="item-log", source_ref=ref, collected_at=_ts(), payload=text, status=EvidenceStatus.PRESENT)
+
+
+def _bundle(*items: EvidenceItem) -> EvidenceBundle:
+    target = ObjectRef(api_group="", api_version="v1", kind="Pod", namespace="ns", name="p")
+    return EvidenceBundle(
+        id="bundle-1",
+        investigation_target=target,
+        collected_at_range=(
+            datetime(2026, 10, 14, 0, 0, 0, tzinfo=timezone.utc),
+            datetime(2026, 10, 14, 0, 0, 1, tzinfo=timezone.utc),
+        ),
+        items=list(items),
+    )
+
+
+def _deterministic_finding(pod: EvidenceItem) -> Finding:
+    locator = EvidenceLocator(
+        evidence_id=pod.id,
+        pointer=FieldPath(json_pointer="/status/containerStatuses/0/state/waiting/reason"),
+        quoted_text="ErrImagePull",
+    )
+    return Finding(
+        id="f1", kind=FindingKind.DETERMINISTIC_FINDING, statement="image pull failed",
+        evidence_locators=[locator], produced_by="rule:R2_tag_not_found",
+    )
+
+
+def _ai_hypothesis(pod: EvidenceItem) -> Finding:
+    locator = EvidenceLocator(
+        evidence_id=pod.id,
+        pointer=FieldPath(json_pointer="/status/containerStatuses/0/state/waiting/reason"),
+        quoted_text="ErrImagePull",
+    )
+    return Finding(
+        id="h1", kind=FindingKind.AI_HYPOTHESIS, statement="a prior hypothesis",
+        evidence_locators=[locator], produced_by="model:test@v1", confidence=Confidence.LOW,
+    )
+
+
+# --- Reproducibility -------------------------------------------------------------------------
+
+
+def test_same_bundle_and_findings_produce_byte_identical_output():
+    pod = _pod_item()
+    bundle = _bundle(pod)
+    findings = [_deterministic_finding(pod)]
+
+    first = content_hash(build_model_input(bundle, findings))
+    second = content_hash(build_model_input(bundle, findings))
+
+    assert first == second
+
+
+def test_golden_hash_is_stable_for_a_fixed_bundle():
+    """A fixed, hand-built bundle+findings pair always hashes to this exact digest. If this
+    test ever needs to change, build_model_input's output shape changed -- that should be a
+    deliberate, reviewed decision, not an accident."""
+    pod = _pod_item()
+    bundle = _bundle(pod)
+    findings = [_deterministic_finding(pod)]
+
+    digest = content_hash(build_model_input(bundle, findings))
+
+    assert digest == "8e398a00298c4de36eb121972b149aae429bae89a55365a6ecd63bbf80a410d7"
+
+
+def test_different_findings_change_the_hash():
+    pod = _pod_item()
+    bundle = _bundle(pod)
+
+    hash_with_finding = content_hash(build_model_input(bundle, [_deterministic_finding(pod)]))
+    hash_without_finding = content_hash(build_model_input(bundle, []))
+
+    assert hash_with_finding != hash_without_finding
+
+
+def test_different_bundle_changes_the_hash():
+    pod = _pod_item()
+    bundle_a = _bundle(pod)
+    bundle_b = _bundle(pod, _log_item())
+
+    hash_a = content_hash(build_model_input(bundle_a, []))
+    hash_b = content_hash(build_model_input(bundle_b, []))
+
+    assert hash_a != hash_b
+
+
+# --- Projection correctness ------------------------------------------------------------------
+
+
+def test_evidence_is_keyed_by_the_real_evidence_id():
+    pod = _pod_item()
+    bundle = _bundle(pod)
+    model_input = build_model_input(bundle, [])
+    assert set(model_input["evidence"].keys()) == {pod.id}
+    assert model_input["evidence"][pod.id]["evidence_id"] == pod.id
+
+
+def test_ai_hypothesis_findings_are_excluded_from_the_findings_section():
+    pod = _pod_item()
+    bundle = _bundle(pod)
+    findings = [_deterministic_finding(pod), _ai_hypothesis(pod)]
+
+    model_input = build_model_input(bundle, findings)
+
+    produced_by_values = {f["produced_by"] for f in model_input["findings"]}
+    assert produced_by_values == {"rule:R2_tag_not_found"}
+
+
+def test_bundle_and_target_identity_are_included():
+    pod = _pod_item()
+    bundle = _bundle(pod)
+    model_input = build_model_input(bundle, [])
+    assert model_input["bundle_id"] == bundle.id
+    assert model_input["investigation_target"]["name"] == "p"
+
+
+# --- Bounding ---------------------------------------------------------------------------------
+
+
+def test_long_string_payload_is_truncated_and_flagged():
+    long_text = "x" * (DEFAULT_MAX_PAYLOAD_CHARS + 500)
+    log = _log_item(long_text)
+    bundle = _bundle(log)
+
+    model_input = build_model_input(bundle, [])
+    entry = model_input["evidence"][log.id]
+
+    assert entry["payload_truncated"] is True
+    assert entry["payload_original_chars"] == len(long_text)
+    assert len(entry["payload"]) == DEFAULT_MAX_PAYLOAD_CHARS
+
+
+def test_short_string_payload_is_not_truncated():
+    log = _log_item("short log\n")
+    bundle = _bundle(log)
+
+    model_input = build_model_input(bundle, [])
+    entry = model_input["evidence"][log.id]
+
+    assert "payload_truncated" not in entry
+    assert entry["payload"] == "short log\n"
+
+
+def test_custom_max_payload_chars_is_respected():
+    log = _log_item("0123456789")
+    bundle = _bundle(log)
+
+    model_input = build_model_input(bundle, [], max_payload_chars=5)
+    entry = model_input["evidence"][log.id]
+
+    assert entry["payload"] == "01234"
+    assert entry["payload_truncated"] is True
+
+
+def test_non_present_evidence_item_has_no_payload_key():
+    ref = ApiCallRef(verb="list", path="/events", params={})
+    gap = EvidenceItem(id="gap-1", source_ref=ref, collected_at=_ts(), status=EvidenceStatus.NOT_FOUND)
+    bundle = _bundle(gap)
+
+    model_input = build_model_input(bundle, [])
+    entry = model_input["evidence"][gap.id]
+
+    assert "payload" not in entry
+    assert entry["status"] == "NOT_FOUND"

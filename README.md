@@ -89,9 +89,21 @@ below.
   Pod and ServiceAccount objects; their contents are never inspected.
 - `Service`, `EndpointSlice`, `Namespace`, and `ResourceQuota` remain deferred — no evidence
   collected in this project's testing has needed them.
-- No AI/LLM call of any kind. The deterministic pipeline is complete and useful on its own; the
-  AI-hypothesis layer is an unimplemented, typed interface only (`FindingKind.AI_HYPOTHESIS`
-  exists in the schema so it will not require a breaking change later, but nothing produces it).
+- No real AI/LLM call has been made by this project yet, and the deterministic pipeline remains
+  complete and useful entirely on its own. Phase 0.11 built the AI-hypothesis layer's offline
+  machinery (`src/k8s_investigator/ai/`: input projection, candidate parsing, evidence-reference
+  validation, deduplication, confidence ranking) and two narrow `Finding` validator rules (an
+  `AI_HYPOTHESIS` must cite evidence and carry a confidence label). Phase 0.12 added an opt-in
+  CLI path (`--with-ai-hypotheses`, off by default) with honest failure reporting
+  (`ai_hypothesis_status`: `NOT_ATTEMPTED`/`SUCCEEDED`/`FAILED` — a failure is never shown as a
+  silent zero-hypothesis success) and a real `HypothesisModelClient` adapter for the OpenAI API
+  (`ai/openai_client.py`, an optional `pip install -e ".[ai]"` dependency), fully tested offline
+  against a mocked client — no network call, no credential, no `openai` package install
+  required by the test suite. No live model call has actually been made; that requires
+  `OPENAI_API_KEY` (not set in this project's own development/test environment) and explicit,
+  separate approval before incurring any API cost. See
+  `docs/phase-0.11-ai-hypothesis-layer-design.md` and
+  `docs/phase-0.12-real-model-integration-notes.md`.
 - No database, message broker, or web service — this is a CLI that reads evidence and writes
   files.
 

@@ -113,7 +113,10 @@ def validate_finding_references(finding: Finding, bundle: EvidenceBundle) -> Non
 
     # Defense in depth: Finding's own model_validator already enforces this at construction
     # time; re-checking here means a bundle-level validation pass catches it too.
-    if finding.kind == FindingKind.DETERMINISTIC_FINDING and not finding.evidence_locators:
+    if (
+        finding.kind in (FindingKind.DETERMINISTIC_FINDING, FindingKind.AI_HYPOTHESIS)
+        and not finding.evidence_locators
+    ):
         raise UngroundedFindingError(finding.id)
 
 

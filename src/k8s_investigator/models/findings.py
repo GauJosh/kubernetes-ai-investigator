@@ -59,4 +59,19 @@ class Finding(BaseModel):
                 "a deterministic finding expresses limitations via 'limitation' text, not a "
                 "categorical confidence label (docs/phase-0.8-mvp-blueprint.md §D)."
             )
+        if self.kind == FindingKind.AI_HYPOTHESIS:
+            # Phase 0.11: an AI hypothesis is evidence-first by construction, same as a
+            # DETERMINISTIC_FINDING -- an evidence-free "hypothesis" is just a guess, and a
+            # hypothesis with no categorical confidence is not actually a ranked hypothesis.
+            if not self.evidence_locators:
+                raise ValueError(
+                    f"Finding {self.id!r}: an AI_HYPOTHESIS with no evidence_locators is a "
+                    "guess, not a grounded hypothesis (docs/phase-0.11-ai-hypothesis-layer-"
+                    "design.md §3.4)."
+                )
+            if self.confidence is None:
+                raise ValueError(
+                    f"Finding {self.id!r}: an AI_HYPOTHESIS must carry a categorical "
+                    "'confidence' label (docs/phase-0.11-ai-hypothesis-layer-design.md §3.4)."
+                )
         return self

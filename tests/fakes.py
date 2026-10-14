@@ -140,4 +140,30 @@ class FakeKubernetesClient:
         return self.sibling_pods
 
 
-__all__ = ["FakeKubernetesClient", "ApiNotFoundError", "ApiForbiddenError", "ApiTimeoutError"]
+class FakeHypothesisModelClient:
+    """A fake implementing exactly k8s_investigator.ai.model_client.HypothesisModelClient.
+
+    Mirrors FakeKubernetesClient's pattern: records every call (the exact model_input dict it
+    was given) and returns a programmed canned response, or raises a programmed error -- no
+    network, no real model, ever. Used by every ai-layer test in this suite.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.response: str = "[]"
+        self.error: Exception | None = None
+
+    def generate(self, model_input: dict[str, Any]) -> str:
+        self.calls.append(model_input)
+        if self.error:
+            raise self.error
+        return self.response
+
+
+__all__ = [
+    "FakeKubernetesClient",
+    "FakeHypothesisModelClient",
+    "ApiNotFoundError",
+    "ApiForbiddenError",
+    "ApiTimeoutError",
+]

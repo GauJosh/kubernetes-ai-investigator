@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from .models.evidence import EvidenceStatus
 from .models.findings import Finding
-from .models.report import InvestigationReport
+from .models.report import AIHypothesisRunStatus, InvestigationReport
 
 
 def render_text(report: InvestigationReport) -> str:
@@ -35,7 +35,16 @@ def render_text(report: InvestigationReport) -> str:
 
     lines.append("AI HYPOTHESES")
     lines.append("-" * 13)
-    lines.append("  (none -- the AI-hypothesis layer is not implemented in this milestone)")
+    if report.ai_hypothesis_status == AIHypothesisRunStatus.NOT_ATTEMPTED:
+        lines.append("  (not attempted -- run with --with-ai-hypotheses to enable)")
+    elif report.ai_hypothesis_status == AIHypothesisRunStatus.FAILED:
+        lines.append(f"  (AI hypothesis generation FAILED: {report.ai_hypothesis_error})")
+        lines.append("  (the deterministic findings above are unaffected by this failure)")
+    elif not report.ai_hypotheses:
+        lines.append("  (none -- the model produced no hypothesis meeting the evidence bar)")
+    else:
+        for finding in report.ai_hypotheses:
+            lines.extend(_render_finding(finding))
     lines.append("")
 
     lines.append("EVIDENCE GAPS")
@@ -68,6 +77,8 @@ def render_text(report: InvestigationReport) -> str:
 
 def _render_finding(finding: Finding) -> list[str]:
     lines = [f"  [{finding.produced_by}] {finding.statement}"]
+    if finding.confidence:
+        lines.append(f"      confidence: {finding.confidence.value}")
     for locator in finding.evidence_locators:
         lines.append(f"      evidence: {locator.evidence_id[:12]}... -> {locator.quoted_text!r}")
     if finding.limitation:

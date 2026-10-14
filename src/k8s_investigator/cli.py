@@ -19,6 +19,7 @@ from .collector.collect import collect_pod_evidence
 from .errors import InvestigatorError
 from .models.evidence import EvidenceBundle
 from .models.refs import ObjectRef
+from .models.report import AIHypothesisRunStatus
 from .rendering import render_text
 from .report_builder import build_report
 from .rules.engine import evaluate_bundle
@@ -49,6 +50,18 @@ def build_parser() -> argparse.ArgumentParser:
     pod.add_argument("--log-since-seconds", type=int, default=DEFAULT_LOG_SINCE_SECONDS)
     pod.add_argument("--output", choices=["json", "text", "both"], default="text")
     pod.add_argument("--out", metavar="PATH", help="write output to this file instead of stdout")
+    pod.add_argument(
+        "--with-ai-hypotheses",
+        action="store_true",
+        help=(
+            "also attempt AI hypothesis generation over the already-validated evidence and "
+            "deterministic findings (opt-in; off by default). Requires a configured provider "
+            "(AI_HYPOTHESIS_PROVIDER and that provider's own variables) -- see "
+            "k8s_investigator.ai.client_factory. A failure here never blocks or alters the "
+            "deterministic findings; it is reported honestly as ai_hypothesis_status=FAILED, "
+            "never as a silent zero-hypothesis success."
+        ),
+    )
 
     return parser
 
@@ -70,7 +83,20 @@ def main(argv: list[str] | None = None) -> int:
     try:
         validate_bundle_integrity(bundle)
         findings, contradictions = evaluate_bundle(bundle)
-        report = build_report(bundle, findings, contradictions)
+    except InvestigatorError as exc:
+        print(f"internal error: {exc}", file=sys.stderr)
+        return 3
+
+    ai_status = AIHypothesisRunStatus.NOT_ATTEMPTED
+    ai_error: str | None = None
+    if args.with_ai_hypotheses:
+        findings, ai_status, ai_error = _run_ai_hypotheses(bundle, findings)
+
+    try:
+        report = build_report(
+            bundle, findings, contradictions,
+            ai_hypothesis_status=ai_status, ai_hypothesis_error=ai_error,
+        )
     except InvestigatorError as exc:
         print(f"internal error: {exc}", file=sys.stderr)
         return 3
@@ -81,6 +107,33 @@ def main(argv: list[str] | None = None) -> int:
         Path(args.save_bundle).write_text(bundle.model_dump_json(indent=2))
 
     return 0
+
+
+def _run_ai_hypotheses(
+    bundle: EvidenceBundle, findings: list
+) -> tuple[list, AIHypothesisRunStatus, str | None]:
+    """Attempt AI hypothesis generation. Never raises -- any failure (unconfigured provider,
+    a real client's network/auth error, an unrecoverable malformed model response) is caught
+    here and reported as AIHypothesisRunStatus.FAILED with the error's own message, so the
+    deterministic findings already computed are always still returned and always still shipped
+    in the report. A failure is never collapsed into "the AI layer ran and found nothing" --
+    see models/report.py::AIHypothesisRunStatus for why that distinction matters.
+
+    Imports the client factory lazily, mirroring _load_or_collect_bundle's lazy import of the
+    live Kubernetes client: --from-bundle-only, deterministic-only usage should never require
+    any AI-provider dependency to even be installed.
+    """
+    from .ai.client_factory import build_client_from_env
+    from .ai.hypothesis import generate_ai_hypotheses
+
+    try:
+        client, model_identifier = build_client_from_env()
+        ai_findings = generate_ai_hypotheses(bundle, findings, client, model_identifier=model_identifier)
+    except Exception as exc:  # noqa: BLE001 -- an AI-path failure must degrade honestly, not crash the CLI
+        print(f"warning: AI hypothesis generation failed: {exc}", file=sys.stderr)
+        return findings, AIHypothesisRunStatus.FAILED, str(exc)
+
+    return findings + ai_findings, AIHypothesisRunStatus.SUCCEEDED, None
 
 
 def _load_or_collect_bundle(args: argparse.Namespace) -> EvidenceBundle:

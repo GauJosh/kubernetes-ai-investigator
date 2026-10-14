@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 from .models.evidence import ContradictionEdge, EvidenceBundle, EvidenceStatus
 from .models.findings import Finding, FindingKind
-from .models.report import InvestigationReport
+from .models.report import AIHypothesisRunStatus, InvestigationReport
 from .timeline import tag
 from .validation import validate_findings
 
@@ -17,15 +17,25 @@ def build_report(
     bundle: EvidenceBundle,
     findings: list[Finding],
     contradictions: list[ContradictionEdge],
+    *,
+    ai_hypothesis_status: AIHypothesisRunStatus = AIHypothesisRunStatus.NOT_ATTEMPTED,
+    ai_hypothesis_error: str | None = None,
 ) -> InvestigationReport:
     """Validates every finding's evidence locators before building the report. Raises the
     underlying typed error (see errors.py) if any finding does not survive validation --
-    an invalid finding is never shown to a user as if it were a result."""
+    an invalid finding is never shown to a user as if it were a result.
+
+    ``ai_hypothesis_status``/``ai_hypothesis_error`` are supplied by the caller (``cli.py``),
+    which is the only place that knows whether AI hypothesis generation was even attempted and
+    how it went -- this function only assembles what it is given. Every existing call site that
+    omits these two keyword arguments gets exactly Milestone 1-2/Phase 0.11 behavior
+    (NOT_ATTEMPTED, no error), unchanged.
+    """
     validate_findings(findings, bundle)
 
     observed = [f for f in findings if f.kind == FindingKind.OBSERVED_FACT]
     deterministic = [f for f in findings if f.kind == FindingKind.DETERMINISTIC_FINDING]
-    ai_hypotheses = [f for f in findings if f.kind == FindingKind.AI_HYPOTHESIS]  # always [] in Milestone 1
+    ai_hypotheses = [f for f in findings if f.kind == FindingKind.AI_HYPOTHESIS]
 
     evidence_gaps = [item for item in bundle.items if item.status != EvidenceStatus.PRESENT]
 
@@ -37,6 +47,8 @@ def build_report(
         observed_facts=observed,
         deterministic_findings=deterministic,
         ai_hypotheses=ai_hypotheses,
+        ai_hypothesis_status=ai_hypothesis_status,
+        ai_hypothesis_error=ai_hypothesis_error,
         evidence_gaps=evidence_gaps,
         contradictions=contradictions,
         next_steps=_derive_next_steps(deterministic, observed, evidence_gaps, contradictions),

@@ -15,6 +15,10 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<9"]
+# Optional: only required to actually run the OpenAI-backed HypothesisModelClient
+# (ai/openai_client.py). The deterministic pipeline, and the entire offline test suite
+# (tests/test_ai_openai_client.py included -- it injects a fake raw client), need none of this.
+ai = ["openai>=1,<2"]
 
 [project.scripts]
 investigate = "k8s_investigator.cli:main"
