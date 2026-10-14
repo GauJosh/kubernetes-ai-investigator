@@ -169,7 +169,9 @@ transcribe a quote yourself for this shape at all; code resolves the exact text 
 you select. For a quote spanning more than one line (e.g. an error message continuing onto an
 indented continuation line), list every included line's ref, in any order -- they must be a
 contiguous, ascending run of lines from that one evidence item. A line with no "ref" key (it
-was withheld or cut by length limits) cannot be cited at all -- do not invent one.
+was withheld or cut by length limits) cannot be cited at all -- do not invent one. To cite more
+than one non-adjacent span from the same evidence item, use a separate line_citations entry
+for each contiguous span. Never put non-adjacent references in one entry's refs list.
 
 For "payload_shape": "structured" (e.g. a Pod, Event, or Node object), use "evidence_locators"
 exactly as before: pointer_type "field_path" with an RFC 6901 JSON Pointer *relative to that

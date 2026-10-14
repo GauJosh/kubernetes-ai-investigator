@@ -89,21 +89,23 @@ below.
   Pod and ServiceAccount objects; their contents are never inspected.
 - `Service`, `EndpointSlice`, `Namespace`, and `ResourceQuota` remain deferred — no evidence
   collected in this project's testing has needed them.
-- No real AI/LLM call has been made by this project yet, and the deterministic pipeline remains
-  complete and useful entirely on its own. Phase 0.11 built the AI-hypothesis layer's offline
-  machinery (`src/k8s_investigator/ai/`: input projection, candidate parsing, evidence-reference
-  validation, deduplication, confidence ranking) and two narrow `Finding` validator rules (an
-  `AI_HYPOTHESIS` must cite evidence and carry a confidence label). Phase 0.12 added an opt-in
-  CLI path (`--with-ai-hypotheses`, off by default) with honest failure reporting
-  (`ai_hypothesis_status`: `NOT_ATTEMPTED`/`SUCCEEDED`/`FAILED` — a failure is never shown as a
-  silent zero-hypothesis success) and a real `HypothesisModelClient` adapter for the OpenAI API
-  (`ai/openai_client.py`, an optional `pip install -e ".[ai]"` dependency), fully tested offline
-  against a mocked client — no network call, no credential, no `openai` package install
-  required by the test suite. No live model call has actually been made; that requires
-  `OPENAI_API_KEY` (not set in this project's own development/test environment) and explicit,
-  separate approval before incurring any API cost. See
-  `docs/phase-0.11-ai-hypothesis-layer-design.md` and
-  `docs/phase-0.12-real-model-integration-notes.md`.
+- The deterministic pipeline remains complete and useful entirely on its own; the AI-hypothesis
+  layer is opt-in (`--with-ai-hypotheses`, off by default) and still never runs in this
+  project's own test suite or by default. Phase 0.11 built the offline machinery
+  (`src/k8s_investigator/ai/`: input projection, candidate parsing, evidence-reference
+  validation, deduplication, confidence ranking) and two narrow `Finding` validator rules.
+  Phase 0.12 added honest failure reporting (`ai_hypothesis_status`:
+  `NOT_ATTEMPTED`/`SUCCEEDED`/`FAILED`, independent of whether any hypothesis was actually
+  accepted), a real `HypothesisModelClient` adapter for the OpenAI API (an optional
+  `pip install -e ".[ai]"` dependency), and a citation-reference mechanism for multiline log
+  evidence (the model selects pre-issued, code-resolved references instead of constructing
+  quotes itself). 267 tests pass offline (mocked clients only). A small number of live,
+  read-only evaluation calls against real Minikube evidence have since been made (never
+  modifying the cluster) and verified the layer's safety properties — citations are rejected
+  without repair when invalid, and a successful API call is never confused with an accepted
+  hypothesis — though no AI hypothesis has yet been confirmed reaching a final report through
+  live testing. See `docs/phase-0.11-ai-hypothesis-layer-design.md` and
+  `docs/phase-0.12-citation-reference-increment-notes.md` for the full record.
 - No database, message broker, or web service — this is a CLI that reads evidence and writes
   files.
 

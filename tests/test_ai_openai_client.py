@@ -19,6 +19,7 @@ from k8s_investigator.ai.client_factory import HypothesisClientConfigurationErro
 from k8s_investigator.ai.hypothesis import generate_ai_hypotheses
 from k8s_investigator.ai.openai_client import (
     OpenAIHypothesisModelClient,
+    _SYSTEM_INSTRUCTIONS,
     _unwrap_candidate_array,
     build_openai_client_from_env,
 )
@@ -252,3 +253,17 @@ def test_end_to_end_schema_passing_but_hallucinated_citation_is_still_rejected()
     results = generate_ai_hypotheses(bundle, [], client, model_identifier="model:openai/gpt-test")
 
     assert results == []
+
+
+# --- System instructions: non-adjacent-span guidance (live-verification follow-up) -------------
+
+
+def test_instructions_explicitly_require_separate_entries_for_non_adjacent_spans():
+    """A live verification showed the model citing a generic traceback header line and a
+    distant specific error line as one disjoint line_citations selection -- correctly
+    rejected (non-contiguous), but reaching zero accepted hypotheses. This is the smallest
+    fix: an explicit instruction that non-adjacent spans need separate entries. No code,
+    schema, or validation change -- this test only pins the instruction text itself."""
+    normalized = " ".join(_SYSTEM_INSTRUCTIONS.split())
+    assert "use a separate line_citations entry for each contiguous span" in normalized
+    assert "Never put non-adjacent references in one entry's refs list" in normalized
