@@ -80,7 +80,7 @@ _RESPONSE_JSON_SCHEMA: dict[str, Any] = {
                                         {
                                             "type": "object",
                                             "properties": {
-                                                "pointer_type": {"const": "field_path"},
+                                                "pointer_type": {"type": "string", "const": "field_path"},
                                                 "json_pointer": {
                                                     "type": "string",
                                                     "description": "RFC 6901 JSON Pointer into the evidence item's structured payload, e.g. /status/phase.",
@@ -92,9 +92,15 @@ _RESPONSE_JSON_SCHEMA: dict[str, Any] = {
                                         {
                                             "type": "object",
                                             "properties": {
-                                                "pointer_type": {"const": "line_range"},
-                                                "start_line": {"type": "integer"},
-                                                "end_line": {"type": "integer"},
+                                                "pointer_type": {"type": "string", "const": "line_range"},
+                                                "start_line": {
+                                                    "type": "integer",
+                                                    "description": "Copy this exactly from the 'line' value of a line in that evidence item's payload.lines array -- never count lines yourself.",
+                                                },
+                                                "end_line": {
+                                                    "type": "integer",
+                                                    "description": "Same evidence item's 'line' value where the cited range ends (equal to start_line for a single line).",
+                                                },
                                             },
                                             "required": ["pointer_type", "start_line", "end_line"],
                                             "additionalProperties": False,
@@ -124,12 +130,61 @@ additional hypotheses about the underlying cause -- you never collect new eviden
 suggest or perform any remediation action, and you never contradict a deterministic finding
 without clearly saying so in 'limitation'.
 
+The input has two kinds of text, marked explicitly so you never have to guess which is which:
+every entry in "evidence" carries "citable": true -- only text inside such an entry's own
+"payload" is real, literal source content you may quote. Every entry in "findings" carries
+"citable": false -- its "statement" is a human/code-written SUMMARY for your reasoning context
+only, not a substring of any evidence payload, and must NEVER appear as quoted_text, even if it
+describes the same fact you want to cite. If a "findings" entry says something you agree with
+and want to cite, use the SAME evidence_id listed in that finding's own "evidence_ids" and
+quote the actual raw value at a real pointer into that evidence's "payload" -- never the
+finding's own wording.
+
+Every evidence item carries an explicit "payload_shape": either "line_indexed_text" or
+"structured". Check this field, not the shape of the payload itself, to decide which pointer
+type to use -- do not guess from appearance.
+
+For "payload_shape": "line_indexed_text", the payload looks like {"lines": [{"line": 0, "text":
+"..."}, {"line": 1, "text": "..."}, ...], "lines_total": N}. Use pointer_type "line_range" and
+set start_line/end_line to the exact integer "line" values shown -- never count lines yourself,
+copy the number. quoted_text must be exactly the "text" value(s) for the line(s) cited (joined
+by a single newline if citing more than one line, in order), with no added numbering, brackets,
+or the word "line" -- quote only the real content. If your quote spans more than one line (for
+example, an error message that continues onto an indented continuation line), end_line MUST be
+the "line" number of the LAST line included in quoted_text -- end_line equal to start_line means
+your quote is exactly one line, no more.
+
+For "payload_shape": "structured", the payload is a JSON object (e.g. a Pod, Event, or Node).
+Use pointer_type "field_path" with an RFC 6901 JSON Pointer *relative to that payload object
+directly* -- do NOT include a leading "/payload" segment. For example, if the evidence entry is
+{"payload_shape": "structured", "payload": {"message": "..."}}, the correct json_pointer for
+that field is "/message", NOT "/payload/message". A field_path pointer must resolve to a single
+scalar value (a string, number, or boolean) -- never point at a nested object or array; drill
+down to the specific field you mean (e.g. "/status/phase", not "/status").
+
+If a "contradictions" array is present and non-empty, each entry names two evidence_ids
+(evidence_a, evidence_b) that disagree, with a rule_id and description. If your hypothesis
+cites either evidence_id from any contradiction entry, you MUST say so in 'limitation' -- do
+not silently treat one side of an unresolved disagreement as settled fact.
+
 Rules, strictly enforced by code after you respond (a violation causes your hypothesis to be
 silently rejected, not corrected):
 - Every evidence_locators[].evidence_id you cite MUST be a key that literally appears in the
   input's "evidence" object. Never invent one.
 - Every quoted_text MUST be an exact copy of real content at that pointer -- never paraphrase,
-  never fabricate.
+  never fabricate, and never include a line-number label you were shown for reference only.
+- quoted_text identical to any "findings" entry's "statement" is REJECTED -- a finding's
+  statement is marked "citable": false for exactly this reason; quote the real evidence value
+  instead, even when it describes the same fact.
+- For a line_range citation, end_line - start_line + 1 MUST equal the number of lines your own
+  quoted_text spans -- a range that is narrower or wider than your quote is rejected even if
+  the quoted text itself is accurate.
+- confidence "HIGH" is REJECTED unless at least one DETERMINISTIC_FINDING is present in the
+  input's "findings" array. If "findings" contains no DETERMINISTIC_FINDING entry, the
+  deterministic rule bank itself reached no confirmed conclusion -- use "MEDIUM" or "LOW"
+  instead; a hypothesis is still welcome, just not asserted with unwarranted certainty.
+- A hypothesis citing evidence named in any "contradictions" entry with an empty 'limitation'
+  is rejected (see above).
 - Every hypothesis MUST have at least one evidence_locators entry and a confidence value.
 
 If the evidence is insufficient to support any hypothesis, return an empty "hypotheses" array.
@@ -160,6 +215,19 @@ class OpenAIHypothesisModelClient:
     ``raw_client`` is an injection point for tests only -- anything with a
     ``.chat.completions.create(...)`` method shaped like the real SDK's. A real caller should
     use ``build_openai_client_from_env()`` instead of constructing this directly.
+
+    ``last_usage`` is a side-channel for evaluation/observability only -- it is not part of
+    the ``HypothesisModelClient`` Protocol (``generate`` still only returns ``str``) and no
+    caller in this project's own pipeline reads it. It holds the most recent response's
+    ``usage`` object (token counts) exactly as the SDK returned it, or ``None`` before any
+    call or if the response didn't carry one -- read via ``getattr`` so it never raises if a
+    test's injected ``raw_client`` response has no ``usage`` attribute at all.
+
+    ``max_retries`` defaults to 0: this project's design is one request, one response, per
+    investigation (docs/phase-0.11-ai-hypothesis-layer-design.md §4) -- the SDK's default
+    automatic retrying would silently turn "one call" into several on a transient error,
+    which conflicts with that design and would also misreport cost/latency/request-count for
+    any caller trying to measure them honestly. A failure surfaces as a failure.
     """
 
     def __init__(
@@ -168,15 +236,17 @@ class OpenAIHypothesisModelClient:
         api_key: str,
         model: str,
         timeout_seconds: float = 30.0,
+        max_retries: int = 0,
         raw_client: Any | None = None,
     ) -> None:
         self._model = model
+        self.last_usage: Any | None = None
         if raw_client is not None:
             self._client = raw_client
         else:
             from openai import OpenAI  # lazy -- optional dependency, see module docstring
 
-            self._client = OpenAI(api_key=api_key, timeout=timeout_seconds)
+            self._client = OpenAI(api_key=api_key, timeout=timeout_seconds, max_retries=max_retries)
 
     def generate(self, model_input: dict[str, Any]) -> str:
         response = self._client.chat.completions.create(
@@ -194,6 +264,7 @@ class OpenAIHypothesisModelClient:
                 {"role": "user", "content": json.dumps(model_input)},
             ],
         )
+        self.last_usage = getattr(response, "usage", None)
         content = response.choices[0].message.content
         if content is None:
             raise ValueError("OpenAI response contained no message content")

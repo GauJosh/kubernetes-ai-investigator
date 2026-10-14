@@ -13,6 +13,8 @@ import json
 
 import pytest
 
+from .fakes import make_marker_deterministic_finding
+
 from k8s_investigator.ai.client_factory import HypothesisClientConfigurationError
 from k8s_investigator.ai.hypothesis import generate_ai_hypotheses
 from k8s_investigator.ai.openai_client import (
@@ -160,14 +162,35 @@ def test_build_from_env_missing_model_raises(monkeypatch):
         build_openai_client_from_env()
 
 
-def test_build_from_env_with_both_set_does_not_import_the_real_openai_package(monkeypatch):
-    """Constructing the real client without injecting raw_client lazily imports `openai`,
-    which is not installed in this environment -- proving it is truly optional, not silently
-    required, by observing the expected ModuleNotFoundError rather than a successful import."""
+def test_importing_this_module_does_not_pull_in_the_openai_package():
+    """The `openai` package is optional (pyproject.toml's "ai" extra) -- importing
+    ai.openai_client itself must never trigger that import as a module-load side effect,
+    regardless of whether `openai` happens to be installed in this environment. The real
+    import only happens lazily, inside OpenAIHypothesisModelClient.__init__, and only on the
+    branch that doesn't receive an injected raw_client (see test_generate_* above, which all
+    inject one and never need `openai` installed to pass)."""
+    import sys
+
+    sys.modules.pop("k8s_investigator.ai.openai_client", None)
+    sys.modules.pop("openai", None)
+
+    import k8s_investigator.ai.openai_client  # noqa: F401
+
+    assert "openai" not in sys.modules
+
+
+def test_build_from_env_with_both_set_constructs_a_real_client(monkeypatch):
+    """With `openai` installed and both variables set, construction succeeds and returns the
+    expected model identifier -- no network call happens merely by constructing the SDK
+    client object."""
+    pytest.importorskip("openai")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-fake")
     monkeypatch.setenv("AI_HYPOTHESIS_MODEL", "gpt-test")
-    with pytest.raises(ModuleNotFoundError):
-        build_openai_client_from_env()
+
+    client, model_identifier = build_openai_client_from_env()
+
+    assert model_identifier == "model:openai/gpt-test"
+    assert isinstance(client, OpenAIHypothesisModelClient)
 
 
 # --- End-to-end through generate_ai_hypotheses: provider-side schema enforcement does not ------
@@ -203,7 +226,9 @@ def test_end_to_end_valid_openai_style_response_produces_an_accepted_hypothesis(
     raw = _FakeRawClient(content=json.dumps({"hypotheses": [candidate]}))
     client = OpenAIHypothesisModelClient(api_key="unused", model="gpt-test", raw_client=raw)
 
-    results = generate_ai_hypotheses(bundle, [], client, model_identifier="model:openai/gpt-test")
+    results = generate_ai_hypotheses(
+        bundle, [make_marker_deterministic_finding()], client, model_identifier="model:openai/gpt-test"
+    )
 
     assert len(results) == 1
     assert results[0].kind == FindingKind.AI_HYPOTHESIS

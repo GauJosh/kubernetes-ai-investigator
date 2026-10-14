@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from k8s_investigator.models.evidence import EvidenceBundle
+from k8s_investigator.models.evidence import ContradictionEdge, EvidenceBundle
 from k8s_investigator.models.findings import Finding
 from k8s_investigator.rules.engine import evaluate_bundle
 
@@ -35,17 +35,19 @@ class EvalScenario:
     expected_ai_behavior: str
     bundle: EvidenceBundle
     findings: list[Finding]  # the full OBSERVED_FACT + DETERMINISTIC_FINDING list, pre-AI
+    contradictions: list[ContradictionEdge]  # evaluate_bundle's own second return value
 
 
 def _build(name: str, client, *, description: str, expected_ai_behavior: str) -> EvalScenario:
     bundle = collect_and_build(client, namespace="demo-ns", name="demo-pod")
-    findings, _ = evaluate_bundle(bundle)
+    findings, contradictions = evaluate_bundle(bundle)
     return EvalScenario(
         name=name,
         description=description,
         expected_ai_behavior=expected_ai_behavior,
         bundle=bundle,
         findings=findings,
+        contradictions=contradictions,
     )
 
 

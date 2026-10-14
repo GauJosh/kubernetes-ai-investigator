@@ -160,9 +160,33 @@ class FakeHypothesisModelClient:
         return self.response
 
 
+def make_marker_deterministic_finding():
+    """A minimal, valid DETERMINISTIC_FINDING used only to satisfy
+    ai.hypothesis.generate_ai_hypotheses's HIGH-confidence grounding check in tests that are
+    not testing that check specifically. Its own evidence_id need not exist in any particular
+    test's bundle -- the check only counts which finding *kinds* are present, never validates
+    this marker's own citation against any bundle.
+    """
+    from k8s_investigator.models.findings import Finding, FindingKind
+    from k8s_investigator.models.locators import EvidenceLocator, FieldPath
+
+    return Finding(
+        id="finding:marker-deterministic",
+        kind=FindingKind.DETERMINISTIC_FINDING,
+        statement="marker finding for tests that are not about confidence grounding",
+        evidence_locators=[
+            EvidenceLocator(
+                evidence_id="marker-evidence", pointer=FieldPath(json_pointer="/x"), quoted_text="y",
+            )
+        ],
+        produced_by="rule:marker",
+    )
+
+
 __all__ = [
     "FakeKubernetesClient",
     "FakeHypothesisModelClient",
+    "make_marker_deterministic_finding",
     "ApiNotFoundError",
     "ApiForbiddenError",
     "ApiTimeoutError",

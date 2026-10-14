@@ -104,7 +104,9 @@ def test_validation_rejects_out_of_bounds_line_range():
     bad_locator = EvidenceLocator(
         evidence_id=log.id,
         pointer=LineRange(start_line=50, end_line=60),  # the log only has 3 lines
-        quoted_text="whatever",
+        # 11 lines (50-60 inclusive), matching the declared span exactly, so this fails the
+        # real bounds check specifically rather than the separate span-consistency check.
+        quoted_text="\n".join(["whatever"] * 11),
     )
     finding = Finding(
         id="f4", kind=FindingKind.DETERMINISTIC_FINDING, statement="x",

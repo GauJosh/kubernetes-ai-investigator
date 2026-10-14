@@ -187,8 +187,9 @@ def test_build_model_input_preserves_non_sensitive_diagnostic_content():
     model_input = build_model_input(bundle, [])
 
     assert model_input["evidence"][pod.id]["payload"]["status"]["containerStatuses"][0]["state"]["waiting"]["reason"] == "CrashLoopBackOff"
-    assert "Connection refused" in model_input["evidence"][log.id]["payload"]
-    assert "starting up" in model_input["evidence"][log.id]["payload"]
+    log_lines = [line["text"] for line in model_input["evidence"][log.id]["payload"]["lines"]]
+    assert any("Connection refused" in text for text in log_lines)
+    assert any("starting up" in text for text in log_lines)
 
 
 def test_build_model_input_flags_which_evidence_items_were_redacted_and_why():

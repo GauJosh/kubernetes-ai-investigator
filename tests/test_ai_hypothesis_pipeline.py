@@ -22,7 +22,7 @@ from k8s_investigator.ai.hypothesis import (
 from k8s_investigator.models.evidence import EvidenceBundle, EvidenceItem, EvidenceStatus
 from k8s_investigator.models.findings import Confidence, FindingKind
 from k8s_investigator.models.refs import ObjectRef, TimestampValue
-from tests.fakes import FakeHypothesisModelClient
+from tests.fakes import FakeHypothesisModelClient, make_marker_deterministic_finding
 
 
 def _ts() -> TimestampValue:
@@ -262,7 +262,9 @@ def test_generate_ai_hypotheses_sorts_by_confidence_high_first():
     bundle = _bundle(pod, pod2)
     client.response = json.dumps([low, high])
 
-    results = generate_ai_hypotheses(bundle, [], client, model_identifier="model:test@v1")
+    results = generate_ai_hypotheses(
+        bundle, [make_marker_deterministic_finding()], client, model_identifier="model:test@v1"
+    )
 
     assert [f.confidence for f in results] == [Confidence.HIGH, Confidence.LOW]
 

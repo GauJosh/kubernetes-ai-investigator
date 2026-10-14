@@ -43,6 +43,27 @@ def test_every_scenario_model_input_is_reproducible():
         assert first == second
 
 
+def test_every_scenario_builds_valid_model_input_with_its_own_contradictions():
+    """Confirms the real eval harness's own contradiction data (not just synthetic unit
+    fixtures) threads through build_model_input without error -- in particular,
+    r6_capacity_contradiction_present's real recorded contradiction."""
+    for scenario in EVAL_SCENARIOS:
+        model_input = build_model_input(
+            scenario.bundle, scenario.findings, contradictions=scenario.contradictions
+        )
+        assert "contradictions" in model_input
+        assert len(model_input["contradictions"]) == len(scenario.contradictions)
+
+
+def test_r6_scenario_contradiction_is_actually_present_and_shown_to_the_model():
+    scenario = next(s for s in EVAL_SCENARIOS if s.name == "r6_capacity_contradiction_present")
+    assert len(scenario.contradictions) >= 1
+    model_input = build_model_input(
+        scenario.bundle, scenario.findings, contradictions=scenario.contradictions
+    )
+    assert len(model_input["contradictions"]) >= 1
+
+
 def test_set_includes_at_least_two_explicit_abstention_required_scenarios():
     """Phase 0.12 step 3 explicitly requires: 'Include cases where the evidence is
     insufficient and the correct behavior is abstention.'"""

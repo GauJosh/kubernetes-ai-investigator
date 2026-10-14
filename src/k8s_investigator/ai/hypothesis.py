@@ -21,8 +21,13 @@ import json
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from ..canonical import content_hash
-from ..errors import InvestigatorError
-from ..models.evidence import EvidenceBundle
+from ..errors import (
+    FindingStatementCitedAsEvidenceError,
+    InvestigatorError,
+    UnacknowledgedContradictionError,
+    UngroundedConfidenceError,
+)
+from ..models.evidence import ContradictionEdge, EvidenceBundle
 from ..models.findings import Confidence, Finding, FindingKind
 from ..models.locators import EvidenceLocator
 from ..validation import validate_finding_references
@@ -125,6 +130,56 @@ def make_ai_hypothesis_finding(candidate: RawHypothesisCandidate, model_identifi
 _CONFIDENCE_RANK = {Confidence.HIGH: 0, Confidence.MEDIUM: 1, Confidence.LOW: 2}
 
 
+def _check_confidence_requires_deterministic_grounding(
+    finding: Finding, findings: list[Finding]
+) -> None:
+    """A HIGH-confidence AI_HYPOTHESIS requires at least one DETERMINISTIC_FINDING already
+    established for this investigation. A live evaluation showed the model producing
+    HIGH-confidence causal claims from a single piece of generic evidence precisely in the
+    scenarios where the deterministic rule bank itself found nothing definite -- a mechanically
+    valid citation (real evidence, correctly quoted) is not the same as a substantively
+    sufficient one, and this is a structural proxy for that distinction, not a judgment of the
+    hypothesis's own wording. See errors.UngroundedConfidenceError.
+    """
+    if finding.confidence != Confidence.HIGH:
+        return
+    if not any(f.kind == FindingKind.DETERMINISTIC_FINDING for f in findings):
+        raise UngroundedConfidenceError(finding.id)
+
+
+def _check_contradiction_acknowledged(
+    finding: Finding, contradictions: list[ContradictionEdge]
+) -> None:
+    """A hypothesis citing evidence on either side of a recorded contradiction must carry a
+    non-empty 'limitation' -- checked by evidence_id membership only, never by what the
+    hypothesis's prose says, so this generalizes to any future contradiction rather than
+    recognizing specific wording. See errors.UnacknowledgedContradictionError.
+    """
+    if not contradictions:
+        return
+    contested_ids = {edge.evidence_a for edge in contradictions} | {
+        edge.evidence_b for edge in contradictions
+    }
+    if set(finding.evidence_ids) & contested_ids and not finding.limitation:
+        raise UnacknowledgedContradictionError(finding.id)
+
+
+def _check_quote_not_a_finding_statement(finding: Finding, findings: list[Finding]) -> None:
+    """A diagnostic-clarity check, not a new acceptance rule: if a locator's quoted_text is
+    exactly some existing Finding's own rendered statement, flag that specifically rather
+    than letting it fall through to a generic quote-mismatch error. Such a quote was already
+    going to fail validate_finding_references's real content check -- a Finding's statement
+    is rendered prose, essentially never identical to a raw evidence field value -- so this
+    changes nothing about which candidates are accepted; it only names the mistake precisely.
+    A structural equality comparison against known statements, not a judgment of what the
+    hypothesis's own reasoning says. See errors.FindingStatementCitedAsEvidenceError.
+    """
+    statements = {f.statement for f in findings}
+    for locator in finding.evidence_locators:
+        if locator.quoted_text in statements:
+            raise FindingStatementCitedAsEvidenceError(finding.id, locator.evidence_id, locator.quoted_text)
+
+
 def _dedup_key(finding: Finding) -> tuple[str, frozenset[str]]:
     """Exact-duplicate key: the same model call citing the exact same evidence set.
 
@@ -142,21 +197,32 @@ def generate_ai_hypotheses(
     client: HypothesisModelClient,
     *,
     model_identifier: str,
+    contradictions: list[ContradictionEdge] | None = None,
 ) -> list[Finding]:
     """The full, opt-in orchestration: build input -> one model call -> parse -> promote ->
     validate -> dedup -> sort.
 
-    A candidate that fails ``Finding`` construction (e.g. no evidence_locators) or
+    ``contradictions`` is ``evaluate_bundle``'s own second return value -- pass it through so
+    the model is actually shown what it is expected to acknowledge (see
+    ``model_input.build_model_input``'s docstring). Omitting it is equivalent to no recorded
+    contradictions, not an error.
+
+    A candidate that fails ``Finding`` construction (e.g. no evidence_locators),
     ``validate_finding_references`` (e.g. an unknown evidence id, an out-of-bounds pointer, a
-    stale quote) is dropped silently -- rejected, not corrected and not surfaced, exactly like
-    a rule-engine bug is never allowed to reach a report. An empty return value is this layer's
-    abstention representation: a legitimate "the model produced no hypothesis meeting the
-    evidence bar" result, not an error.
+    stale quote), quotes a Finding's own rendered statement instead of real evidence content
+    (``_check_quote_not_a_finding_statement``), a HIGH confidence claim with no deterministic
+    grounding (``_check_confidence_requires_deterministic_grounding``), or citing contested
+    evidence with no acknowledgement (``_check_contradiction_acknowledged``) is dropped
+    silently -- rejected, not corrected and not surfaced, exactly like a rule-engine bug is
+    never allowed to reach a report. An empty return value is this layer's abstention
+    representation: a legitimate "the model produced no hypothesis meeting the bar" result,
+    not an error.
 
     Raises ``HypothesisParseError`` if the model's response as a whole could not be understood
     at all -- deliberately not caught here; see that class's docstring for why.
     """
-    model_input = build_model_input(bundle, findings)
+    contradictions = contradictions or []
+    model_input = build_model_input(bundle, findings, contradictions=contradictions)
     raw_response = client.generate(model_input)
     candidates = parse_candidates(raw_response)
 
@@ -165,7 +231,14 @@ def generate_ai_hypotheses(
     for candidate in candidates:
         try:
             finding = make_ai_hypothesis_finding(candidate, model_identifier)
+            # Checked before the generic content-match gate so this specific, diagnosable
+            # mistake is reported precisely rather than falling through to a generic
+            # mismatch -- it would fail that gate anyway (see the function's own docstring),
+            # so this changes nothing about what is accepted, only why a rejection is named.
+            _check_quote_not_a_finding_statement(finding, findings)
             validate_finding_references(finding, bundle)
+            _check_confidence_requires_deterministic_grounding(finding, findings)
+            _check_contradiction_acknowledged(finding, contradictions)
         except (ValueError, InvestigatorError):
             continue
 

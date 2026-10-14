@@ -7,6 +7,23 @@ Two distinct checks, per docs/phase-0.8-mvp-blueprint.md §D.1:
 * ``validate_finding_references`` -- does every Finding's locator resolve, in bounds, to the
   exact text it quotes, inside a bundle that really contains that evidence? (catches a
   rule-engine bug, not malformed input)
+
+For a ``LineRange`` locator specifically, ``validate_finding_references`` checks two things,
+in order, and both must pass -- neither is a substitute for the other (a live-cluster
+evaluation surfaced exactly why both are needed, see the two distinct errors below):
+
+1. ``_check_line_range_span`` -- does the declared range's line count match how many lines
+   ``quoted_text`` itself spans? A fast, explicit, self-consistency check against the
+   candidate's own two fields. This alone would NOT catch a correct-sized range citing the
+   wrong lines (the original "wrong line index" bug) -- that is still only caught by (2).
+2. The existing content check -- resolve the declared range against the *real* EvidenceItem's
+   payload (``resolve_pointer``/``_resolve_line_range``, completely unchanged) and require an
+   exact match to ``quoted_text``. This is still the sole authority on whether a citation is
+   true; (1) only makes one specific class of failure fail faster, with a clearer reason.
+
+Neither check ever widens, repairs, or otherwise makes a model-generated citation easier to
+pass -- (1) is strictly additional and can only reject earlier what (2) would already reject;
+(2) is byte-for-byte the same comparison this project has always made.
 """
 
 from __future__ import annotations
@@ -19,11 +36,12 @@ from .errors import (
     EvidenceQuoteMismatchError,
     EvidenceReferenceError,
     InvestigatorError,
+    LineRangeSpanMismatchError,
     UngroundedFindingError,
 )
 from .models.evidence import EvidenceBundle, EvidenceItem
 from .models.findings import Finding, FindingKind
-from .models.locators import FieldPath, LineRange, Pointer
+from .models.locators import EvidenceLocator, FieldPath, LineRange, Pointer
 
 
 class EvidenceItemHashMismatchError(InvestigatorError):
@@ -96,12 +114,28 @@ def resolve_pointer(payload: Any, pointer: Pointer) -> str | None:
     return None  # pragma: no cover -- Pointer is a closed discriminated union
 
 
+def _check_line_range_span(finding_id: str, locator: EvidenceLocator) -> None:
+    """A LineRange-specific self-consistency check: does the declared span's line count match
+    how many lines quoted_text itself spans? Checked against the candidate's own two fields
+    only -- deliberately not sufficient on its own (see module docstring); the real-content
+    check in validate_finding_references always still runs afterward regardless.
+    """
+    if not isinstance(locator.pointer, LineRange):
+        return
+    declared_span = locator.pointer.end_line - locator.pointer.start_line + 1
+    quoted_span = locator.quoted_text.count("\n") + 1
+    if declared_span != quoted_span:
+        raise LineRangeSpanMismatchError(finding_id, locator.evidence_id, declared_span, quoted_span)
+
+
 def validate_finding_references(finding: Finding, bundle: EvidenceBundle) -> None:
     """Raise a typed error on the first invalid locator. Returns None if everything checks out."""
     for locator in finding.evidence_locators:
         item = bundle.item_by_id(locator.evidence_id)
         if item is None:
             raise EvidenceReferenceError(finding.id, locator.evidence_id)
+
+        _check_line_range_span(finding.id, locator)
 
         resolved = resolve_pointer(item.payload, locator.pointer)
         if resolved is None:

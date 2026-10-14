@@ -90,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
     ai_status = AIHypothesisRunStatus.NOT_ATTEMPTED
     ai_error: str | None = None
     if args.with_ai_hypotheses:
-        findings, ai_status, ai_error = _run_ai_hypotheses(bundle, findings)
+        findings, ai_status, ai_error = _run_ai_hypotheses(bundle, findings, contradictions)
 
     try:
         report = build_report(
@@ -110,7 +110,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run_ai_hypotheses(
-    bundle: EvidenceBundle, findings: list
+    bundle: EvidenceBundle, findings: list, contradictions: list
 ) -> tuple[list, AIHypothesisRunStatus, str | None]:
     """Attempt AI hypothesis generation. Never raises -- any failure (unconfigured provider,
     a real client's network/auth error, an unrecoverable malformed model response) is caught
@@ -128,7 +128,9 @@ def _run_ai_hypotheses(
 
     try:
         client, model_identifier = build_client_from_env()
-        ai_findings = generate_ai_hypotheses(bundle, findings, client, model_identifier=model_identifier)
+        ai_findings = generate_ai_hypotheses(
+            bundle, findings, client, model_identifier=model_identifier, contradictions=contradictions,
+        )
     except Exception as exc:  # noqa: BLE001 -- an AI-path failure must degrade honestly, not crash the CLI
         print(f"warning: AI hypothesis generation failed: {exc}", file=sys.stderr)
         return findings, AIHypothesisRunStatus.FAILED, str(exc)

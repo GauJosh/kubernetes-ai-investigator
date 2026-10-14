@@ -94,7 +94,10 @@ def test_golden_hash_is_stable_for_a_fixed_bundle():
 
     digest = content_hash(build_model_input(bundle, findings))
 
-    assert digest == "8e398a00298c4de36eb121972b149aae429bae89a55365a6ecd63bbf80a410d7"
+    # Updated again for the "citable" discriminator (findings=False, evidence=True) added to
+    # address the live-retest-observed "quoted a Finding's statement, not real evidence"
+    # confusion -- a deliberate, reviewed shape change, not an accident.
+    assert digest == "c320db5133ebeb68185e756d11663a44db3569e935170089385cbc9c5b401cf7"
 
 
 def test_different_findings_change_the_hash():
@@ -151,7 +154,9 @@ def test_bundle_and_target_identity_are_included():
 # --- Bounding ---------------------------------------------------------------------------------
 
 
-def test_long_string_payload_is_truncated_and_flagged():
+def test_long_single_line_payload_is_truncated_and_flagged():
+    """A single line that on its own exceeds the whole budget is still shown (capped), as
+    exactly one unambiguous line index, rather than shown as nothing."""
     long_text = "x" * (DEFAULT_MAX_PAYLOAD_CHARS + 500)
     log = _log_item(long_text)
     bundle = _bundle(log)
@@ -161,7 +166,10 @@ def test_long_string_payload_is_truncated_and_flagged():
 
     assert entry["payload_truncated"] is True
     assert entry["payload_original_chars"] == len(long_text)
-    assert len(entry["payload"]) == DEFAULT_MAX_PAYLOAD_CHARS
+    assert entry["payload"]["lines_total"] == 1
+    assert entry["payload"]["truncated"] is True
+    assert len(entry["payload"]["lines"]) == 1
+    assert entry["payload"]["lines"][0] == {"line": 0, "text": "x" * DEFAULT_MAX_PAYLOAD_CHARS}
 
 
 def test_short_string_payload_is_not_truncated():
@@ -172,7 +180,7 @@ def test_short_string_payload_is_not_truncated():
     entry = model_input["evidence"][log.id]
 
     assert "payload_truncated" not in entry
-    assert entry["payload"] == "short log\n"
+    assert entry["payload"] == {"lines": [{"line": 0, "text": "short log"}], "lines_total": 1}
 
 
 def test_custom_max_payload_chars_is_respected():
@@ -182,7 +190,40 @@ def test_custom_max_payload_chars_is_respected():
     model_input = build_model_input(bundle, [], max_payload_chars=5)
     entry = model_input["evidence"][log.id]
 
-    assert entry["payload"] == "01234"
+    assert entry["payload"]["lines"] == [{"line": 0, "text": "01234"}]
+    assert entry["payload_truncated"] is True
+
+
+def test_multiline_log_each_line_gets_its_own_explicit_zero_indexed_number():
+    log = _log_item("alpha\nbeta\ngamma\n")
+    bundle = _bundle(log)
+
+    model_input = build_model_input(bundle, [])
+    entry = model_input["evidence"][log.id]
+
+    assert entry["payload"]["lines"] == [
+        {"line": 0, "text": "alpha"},
+        {"line": 1, "text": "beta"},
+        {"line": 2, "text": "gamma"},
+    ]
+    assert entry["payload"]["lines_total"] == 3
+    assert "truncated" not in entry["payload"]
+
+
+def test_multiline_log_truncation_drops_whole_trailing_lines_never_a_partial_line():
+    """Truncation must never show a clipped partial line -- the model should never be handed
+    a line it could then (correctly) quote in full, but which doesn't actually end there in
+    the real bundle."""
+    log = _log_item("alpha\nbeta\ngamma\ndelta\n")
+    bundle = _bundle(log)
+
+    # Budget fits "alpha" (5) + "beta" (4) = 9 exactly, nothing left for "gamma".
+    model_input = build_model_input(bundle, [], max_payload_chars=9)
+    entry = model_input["evidence"][log.id]
+
+    assert entry["payload"]["lines"] == [{"line": 0, "text": "alpha"}, {"line": 1, "text": "beta"}]
+    assert entry["payload"]["lines_total"] == 4
+    assert entry["payload"]["truncated"] is True
     assert entry["payload_truncated"] is True
 
 
