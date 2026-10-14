@@ -141,3 +141,30 @@ class K8sApiCollectorClient:
             return _raw_json(resp)
         except Exception as exc:  # noqa: BLE001
             raise _translate_errors(exc) from exc
+
+    # --- Milestone 2 additions -- docs/research/read-only-access-matrix.md §7 ---
+
+    def get_persistent_volume_claim(self, namespace: str, name: str) -> dict[str, Any]:
+        try:
+            resp = self._core.read_namespaced_persistent_volume_claim(
+                name, namespace, _preload_content=False, _request_timeout=self._timeout
+            )
+            return _raw_json(resp)
+        except Exception as exc:  # noqa: BLE001
+            raise _translate_errors(exc) from exc
+
+    def list_nodes(self) -> list[dict[str, Any]]:
+        try:
+            resp = self._core.list_node(_preload_content=False, _request_timeout=self._timeout)
+            return _raw_json(resp).get("items", [])
+        except Exception as exc:  # noqa: BLE001
+            raise _translate_errors(exc) from exc
+
+    def list_persistent_volumes(self) -> list[dict[str, Any]]:
+        try:
+            resp = self._core.list_persistent_volume(
+                _preload_content=False, _request_timeout=self._timeout
+            )
+            return _raw_json(resp).get("items", [])
+        except Exception as exc:  # noqa: BLE001
+            raise _translate_errors(exc) from exc

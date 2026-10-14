@@ -33,6 +33,14 @@ class FakeKubernetesClient:
         self.service_accounts: dict[str, dict[str, Any]] = {}
         self.service_account_errors: dict[str, Exception] = {}
 
+        # Milestone 2 additions
+        self.persistent_volume_claims: dict[str, dict[str, Any]] = {}
+        self.persistent_volume_claim_errors: dict[str, Exception] = {}
+        self.nodes: list[dict[str, Any]] = []
+        self.nodes_error: Exception | None = None
+        self.persistent_volumes: list[dict[str, Any]] = []
+        self.persistent_volumes_error: Exception | None = None
+
     def _record(self, method: str, *args: Any, **kwargs: Any) -> None:
         self.calls.append((method, args, kwargs))
 
@@ -96,6 +104,28 @@ class FakeKubernetesClient:
         if name not in self.service_accounts:
             raise ApiNotFoundError()
         return self.service_accounts[name]
+
+    # --- Milestone 2 additions ---
+
+    def get_persistent_volume_claim(self, namespace: str, name: str) -> dict[str, Any]:
+        self._record("get_persistent_volume_claim", namespace, name)
+        if name in self.persistent_volume_claim_errors:
+            raise self.persistent_volume_claim_errors[name]
+        if name not in self.persistent_volume_claims:
+            raise ApiNotFoundError()
+        return self.persistent_volume_claims[name]
+
+    def list_nodes(self) -> list[dict[str, Any]]:
+        self._record("list_nodes")
+        if self.nodes_error:
+            raise self.nodes_error
+        return self.nodes
+
+    def list_persistent_volumes(self) -> list[dict[str, Any]]:
+        self._record("list_persistent_volumes")
+        if self.persistent_volumes_error:
+            raise self.persistent_volumes_error
+        return self.persistent_volumes
 
 
 __all__ = ["FakeKubernetesClient", "ApiNotFoundError", "ApiForbiddenError", "ApiTimeoutError"]

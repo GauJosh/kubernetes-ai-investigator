@@ -32,16 +32,88 @@ def make_pod(
     owner_rs_name: str | None = "demo-rs",
     uid: str = "pod-uid-1",
     creation_timestamp: str | None = None,
+    # Milestone 2 (Scheduling-fault, R5-R10) additions -- all unused unless unscheduled=True.
+    unscheduled: bool = False,
+    node_selector: dict[str, str] | None = None,
+    node_affinity_required: tuple[str, str] | None = None,  # (key, value) -- the 'In' operator shape R8 evaluates
+    tolerations: list[dict[str, Any]] | None = None,
+    container_resource_requests: dict[str, str] | None = None,
+    pvc_claim_names: list[str] | None = None,
 ) -> dict[str, Any]:
     if creation_timestamp is None:
         creation_timestamp = _recent_timestamp()
+
+    owner_refs = []
+    if owner_rs_name:
+        owner_refs.append({"kind": "ReplicaSet", "name": owner_rs_name, "controller": True, "uid": "rs-uid-1"})
+
+    default_tolerations = [
+        {"key": "node.kubernetes.io/not-ready", "operator": "Exists", "effect": "NoExecute", "tolerationSeconds": 300},
+        {"key": "node.kubernetes.io/unreachable", "operator": "Exists", "effect": "NoExecute", "tolerationSeconds": 300},
+    ]
+
+    volumes = []
+    for claim_name in (pvc_claim_names or []):
+        volumes.append({"name": f"{claim_name}-vol", "persistentVolumeClaim": {"claimName": claim_name}})
+
+    spec: dict[str, Any] = {
+        "serviceAccountName": service_account_name,
+        "containers": [
+            {
+                "name": container_name,
+                "image": "example.registry/demo:v1",
+                "resources": {"requests": container_resource_requests} if container_resource_requests else {},
+            }
+        ],
+        "imagePullSecrets": [{"name": s} for s in (pod_image_pull_secrets or [])],
+        "tolerations": tolerations if tolerations is not None else default_tolerations,
+    }
+    if node_selector:
+        spec["nodeSelector"] = node_selector
+    if node_affinity_required:
+        key, value = node_affinity_required
+        spec["affinity"] = {
+            "nodeAffinity": {
+                "requiredDuringSchedulingIgnoredDuringExecution": {
+                    "nodeSelectorTerms": [
+                        {"matchExpressions": [{"key": key, "operator": "In", "values": [value]}]}
+                    ]
+                }
+            }
+        }
+    if volumes:
+        spec["volumes"] = volumes
+
+    metadata = {
+        "name": name,
+        "namespace": namespace,
+        "uid": uid,
+        "creationTimestamp": creation_timestamp,
+        "ownerReferences": owner_refs,
+        "resourceVersion": "1000",
+    }
+
+    if unscheduled:
+        return {
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "metadata": metadata,
+            "spec": spec,
+            "status": {
+                "phase": "Pending",
+                "conditions": [
+                    {"type": "PodScheduled", "status": "False", "reason": "Unschedulable", "message": "0/4 nodes are available"}
+                ],
+                "containerStatuses": [],  # not yet scheduled -- no container has started
+            },
+        }
+
     container_status: dict[str, Any] = {
         "name": container_name,
         "image": "example.registry/demo:v1",
         "restartCount": restart_count,
         "ready": False,
     }
-
     if crash_loop:
         container_status["state"] = {"waiting": {"reason": "CrashLoopBackOff", "message": "back-off restarting failed container"}}
         if last_terminated_reason:
@@ -56,26 +128,11 @@ def make_pod(
         container_status["state"] = {"running": {"startedAt": "2026-10-13T10:05:00Z"}}
         container_status["ready"] = True
 
-    owner_refs = []
-    if owner_rs_name:
-        owner_refs.append({"kind": "ReplicaSet", "name": owner_rs_name, "controller": True, "uid": "rs-uid-1"})
-
     return {
         "apiVersion": "v1",
         "kind": "Pod",
-        "metadata": {
-            "name": name,
-            "namespace": namespace,
-            "uid": uid,
-            "creationTimestamp": creation_timestamp,
-            "ownerReferences": owner_refs,
-            "resourceVersion": "1000",
-        },
-        "spec": {
-            "serviceAccountName": service_account_name,
-            "containers": [{"name": container_name, "image": "example.registry/demo:v1"}],
-            "imagePullSecrets": [{"name": s} for s in (pod_image_pull_secrets or [])],
-        },
+        "metadata": metadata,
+        "spec": spec,
         "status": {
             "phase": "Running" if running else "Pending",
             "containerStatuses": [container_status],
@@ -134,4 +191,74 @@ def make_service_account(
         "kind": "ServiceAccount",
         "metadata": {"name": name, "namespace": namespace},
         "imagePullSecrets": [{"name": s} for s in (image_pull_secrets or [])],
+    }
+
+
+def make_node(
+    *,
+    name: str = "worker-01",
+    cordoned: bool = False,
+    taints: list[dict[str, Any]] | None = None,
+    labels: dict[str, str] | None = None,
+    allocatable_cpu: str = "4",
+    allocatable_memory: str = "8Gi",
+) -> dict[str, Any]:
+    effective_taints = list(taints or [])
+    spec: dict[str, Any] = {"taints": effective_taints}
+    if cordoned:
+        effective_taints.append({"key": "node.kubernetes.io/unschedulable", "effect": "NoSchedule"})
+        spec["unschedulable"] = True  # real K8s omits this key entirely when false, never sets it explicitly
+    return {
+        "apiVersion": "v1",
+        "kind": "Node",
+        "metadata": {"name": name, "labels": labels or {}, "resourceVersion": "2000"},
+        "spec": spec,
+        "status": {"allocatable": {"cpu": allocatable_cpu, "memory": allocatable_memory}},
+    }
+
+
+def make_pvc(
+    *,
+    name: str = "demo-pvc",
+    namespace: str = "demo-ns",
+    phase: str = "Pending",
+    storage_class_name: str | None = "standard",
+    access_modes: list[str] | None = None,
+    requested_storage: str = "1Gi",
+) -> dict[str, Any]:
+    return {
+        "apiVersion": "v1",
+        "kind": "PersistentVolumeClaim",
+        "metadata": {"name": name, "namespace": namespace, "resourceVersion": "3000"},
+        "spec": {
+            "storageClassName": storage_class_name,
+            "accessModes": access_modes or ["ReadWriteOnce"],
+            "resources": {"requests": {"storage": requested_storage}},
+        },
+        "status": {"phase": phase},
+    }
+
+
+def make_pv(
+    *,
+    name: str = "demo-pv",
+    storage_class_name: str | None = "standard",
+    access_modes: list[str] | None = None,
+    capacity: str = "1Gi",
+    bound_claim_name: str | None = None,
+    bound_claim_namespace: str = "demo-ns",
+) -> dict[str, Any]:
+    spec: dict[str, Any] = {
+        "storageClassName": storage_class_name,
+        "accessModes": access_modes or ["ReadWriteOnce"],
+        "capacity": {"storage": capacity},
+    }
+    if bound_claim_name:
+        spec["claimRef"] = {"name": bound_claim_name, "namespace": bound_claim_namespace}
+    return {
+        "apiVersion": "v1",
+        "kind": "PersistentVolume",
+        "metadata": {"name": name, "resourceVersion": "4000"},
+        "spec": spec,
+        "status": {"phase": "Bound" if bound_claim_name else "Available"},
     }

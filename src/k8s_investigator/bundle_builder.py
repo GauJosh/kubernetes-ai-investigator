@@ -22,11 +22,23 @@ from .models.evidence import (
 from .models.refs import ApiCallRef, ObjectRef, TimestampValue
 from .timeline import expiry_note, is_plausibly_expired, tag
 
-def _is_events_list_call(ref: Any) -> bool:
-    """The events LIST call is an ApiCallRef (see collector/collect.py), not an ObjectRef --
-    its payload is a *list* of raw Event dicts and must be split into one item per event,
-    unlike every other (single-object) call this collector makes."""
-    return isinstance(ref, ApiCallRef) and ref.verb == "list" and ref.path.rstrip("/").endswith("/events")
+#: Every LIST-shaped call this collector makes, keyed by the final path segment -- its payload
+#: is a *list* of raw objects and must be split into one EvidenceItem per entry, unlike every
+#: other (single-object) call. (api_group, api_version, kind, apply_expiry_heuristic). Only the
+#: events list gets the plausible-expiry heuristic (docs/research/event-timeline-contract.md) --
+#: an empty Node or PersistentVolume list has no TTL-eviction concept to flag.
+_LIST_CALL_SHAPES: dict[str, tuple[str, str, str, bool]] = {
+    "events": ("", "v1", "Event", True),
+    "nodes": ("", "v1", "Node", False),
+    "persistentvolumes": ("", "v1", "PersistentVolume", False),
+}
+
+
+def _list_shape_for_ref(ref: Any) -> tuple[str, str, str, bool] | None:
+    if not (isinstance(ref, ApiCallRef) and ref.verb == "list"):
+        return None
+    last_segment = ref.path.rstrip("/").rsplit("/", 1)[-1]
+    return _LIST_CALL_SHAPES.get(last_segment)
 
 
 def build_bundle(
@@ -81,11 +93,20 @@ def _items_from_outcome(
         return [_gap_item(outcome, collected_at)]
 
     ref = outcome.requested
-    if _is_events_list_call(ref):
-        events = outcome.payload or []
-        if not events:
-            return [_empty_list_item(outcome, collected_at, pod_created_at)]
-        return [_event_item(event, collected_at) for event in events]
+    list_shape = _list_shape_for_ref(ref)
+    if list_shape is not None:
+        api_group, api_version, kind, apply_expiry_heuristic = list_shape
+        entries = outcome.payload or []
+        if not entries:
+            return [
+                _empty_list_item(
+                    outcome, collected_at, pod_created_at if apply_expiry_heuristic else None
+                )
+            ]
+        return [
+            _list_entry_item(entry, api_group, api_version, kind, collected_at)
+            for entry in entries
+        ]
 
     # Single-object GET (Pod/ReplicaSet/Deployment/ServiceAccount) or a bounded log fetch
     # (ApiCallRef) -- exactly one item either way.
@@ -140,22 +161,27 @@ def _empty_list_item(
     )
 
 
-def _event_item(event: dict[str, Any], collected_at: TimestampValue) -> EvidenceItem:
-    metadata = event.get("metadata", {})
+def _list_entry_item(
+    entry: dict[str, Any], api_group: str, api_version: str, kind: str, collected_at: TimestampValue
+) -> EvidenceItem:
+    """One EvidenceItem for one entry of a LIST call's payload -- an Event, a Node, or a
+    PersistentVolume. ``namespace`` is None for the cluster-scoped kinds (Node,
+    PersistentVolume), exactly matching their real, namespace-less metadata."""
+    metadata = entry.get("metadata", {})
     ref = ObjectRef(
-        api_group="",
-        api_version="v1",
-        kind="Event",
+        api_group=api_group,
+        api_version=api_version,
+        kind=kind,
         namespace=metadata.get("namespace"),
         name=metadata.get("name", ""),
         resource_version=metadata.get("resourceVersion"),
     )
-    item_id = compute_evidence_item_id(ref.model_dump(mode="json"), event)
+    item_id = compute_evidence_item_id(ref.model_dump(mode="json"), entry)
     return EvidenceItem(
         id=item_id,
         source_ref=ref,
         collected_at=collected_at,
-        payload=event,
+        payload=entry,
         status=EvidenceStatus.PRESENT,
     )
 

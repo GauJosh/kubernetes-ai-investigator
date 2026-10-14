@@ -75,6 +75,16 @@ class KubernetesClient(Protocol):
 
     def get_service_account(self, namespace: str, name: str) -> dict[str, Any]: ...
 
+    # --- Milestone 2 additions -- see docs/research/read-only-access-matrix.md §7 for the
+    # exact RBAC this requires. Added only because R5-R10 require them; `get` on Node/
+    # PersistentVolume is approved but never called -- see §7.1 for why only `list` is used.
+
+    def get_persistent_volume_claim(self, namespace: str, name: str) -> dict[str, Any]: ...
+
+    def list_nodes(self) -> list[dict[str, Any]]: ...
+
+    def list_persistent_volumes(self) -> list[dict[str, Any]]: ...
+
 
 def run_call(requested: SourceRef, call) -> CollectionOutcome:
     """Run one bounded API call, translating any failure into a typed CollectionOutcome.

@@ -9,7 +9,16 @@ from __future__ import annotations
 
 from tests.fakes import ApiForbiddenError, FakeKubernetesClient
 
-from .builders import make_deployment, make_event, make_pod, make_replica_set, make_service_account
+from .builders import (
+    make_deployment,
+    make_event,
+    make_node,
+    make_pod,
+    make_pv,
+    make_pvc,
+    make_replica_set,
+    make_service_account,
+)
 
 
 def _with_owner_chain(client: FakeKubernetesClient, *, sa_image_pull_secrets=None) -> FakeKubernetesClient:
@@ -161,3 +170,203 @@ def service_account_unavailable_but_r1_still_resolves() -> FakeKubernetesClient:
     c.deployments["demo-deploy"] = make_deployment()
     c.service_account_errors["default"] = ApiForbiddenError("ServiceAccount is forbidden")
     return c
+
+
+# ============================================================================================
+# Milestone 2: Scheduling-fault scenarios (R5-R10)
+# ============================================================================================
+
+
+def _unscheduled(c: FakeKubernetesClient, *, nodes=None, pvcs=None, pvs=None, **pod_kwargs) -> FakeKubernetesClient:
+    c.pod = make_pod(unscheduled=True, **pod_kwargs)
+    c.nodes = nodes or []
+    for pvc in (pvcs or []):
+        c.persistent_volume_claims[pvc["metadata"]["name"]] = pvc
+    c.persistent_volumes = pvs or []
+    return _with_owner_chain(c)
+
+
+def r5_all_nodes_cordoned() -> FakeKubernetesClient:
+    c = FakeKubernetesClient()
+    c.events = [make_event("0/4 nodes are available: 4 node(s) were unschedulable.", reason="FailedScheduling")]
+    return _unscheduled(
+        c,
+        nodes=[make_node(name=f"node-{i}", cordoned=True) for i in range(4)],
+    )
+
+
+def r5_partial_cordon_underdetermined() -> FakeKubernetesClient:
+    """Only the always-cordoned control-plane node is cordoned; the event's generic
+    'unschedulable' clause does not, by itself, explain the failure -- must downgrade to an
+    OBSERVED_FACT, not a confident DETERMINISTIC_FINDING."""
+    c = FakeKubernetesClient()
+    c.events = [make_event("0/4 nodes are available: 1 node(s) were unschedulable.", reason="FailedScheduling")]
+    return _unscheduled(
+        c,
+        nodes=[make_node(name="master", cordoned=True)] + [make_node(name=f"worker-{i}") for i in range(3)],
+    )
+
+
+def r6_insufficient_cpu() -> FakeKubernetesClient:
+    c = FakeKubernetesClient()
+    c.events = [
+        make_event(
+            "0/4 nodes are available: 1 node(s) were unschedulable, 3 Insufficient cpu.",
+            reason="FailedScheduling",
+        )
+    ]
+    return _unscheduled(
+        c,
+        container_resource_requests={"cpu": "16"},
+        nodes=[make_node(name="master", cordoned=True)]
+        + [make_node(name=f"worker-{i}", allocatable_cpu="4") for i in range(3)],
+    )
+
+
+def r6_insufficient_memory() -> FakeKubernetesClient:
+    c = FakeKubernetesClient()
+    c.events = [
+        make_event(
+            "0/4 nodes are available: 1 node(s) were unschedulable, 3 Insufficient memory.",
+            reason="FailedScheduling",
+        )
+    ]
+    return _unscheduled(
+        c,
+        container_resource_requests={"memory": "20Gi"},
+        nodes=[make_node(name="master", cordoned=True)]
+        + [make_node(name=f"worker-{i}", allocatable_memory="8Gi") for i in range(3)],
+    )
+
+
+def r6_capacity_contradiction() -> FakeKubernetesClient:
+    """The event claims insufficient cpu, but a known node's allocatable cpu is actually
+    sufficient for the pod's request -- a genuine data disagreement, not resolved silently."""
+    c = FakeKubernetesClient()
+    c.events = [make_event("0/4 nodes are available: 3 Insufficient cpu.", reason="FailedScheduling")]
+    return _unscheduled(
+        c,
+        container_resource_requests={"cpu": "2"},
+        nodes=[make_node(name="worker-1", allocatable_cpu="8")],  # 8 cores >= 2 requested -- contradicts "insufficient"
+    )
+
+
+def r7_taint_toleration_mismatch() -> FakeKubernetesClient:
+    c = FakeKubernetesClient()
+    c.events = [
+        make_event(
+            "0/4 nodes are available: 1 node(s) were unschedulable, 3 node(s) had untolerated taint {critical: true}.",
+            reason="FailedScheduling",
+        )
+    ]
+    return _unscheduled(
+        c,
+        nodes=[make_node(name="master", cordoned=True)]
+        + [
+            make_node(name=f"worker-{i}", taints=[{"key": "critical", "value": "true", "effect": "NoSchedule"}])
+            for i in range(3)
+        ],
+    )
+
+
+def r8_node_selector_mismatch() -> FakeKubernetesClient:
+    c = FakeKubernetesClient()
+    c.events = [
+        make_event(
+            "0/4 nodes are available: 1 node(s) were unschedulable, 3 node(s) didn't match Pod's node affinity/selector.",
+            reason="FailedScheduling",
+        )
+    ]
+    return _unscheduled(
+        c,
+        node_selector={"environment": "production"},
+        nodes=[make_node(name="master", cordoned=True)]
+        + [make_node(name=f"worker-{i}", labels={"environment": "staging"}) for i in range(3)],
+    )
+
+
+def r8_node_affinity_mismatch() -> FakeKubernetesClient:
+    c = FakeKubernetesClient()
+    c.events = [
+        make_event(
+            "0/4 nodes are available: 1 node(s) were unschedulable, 3 node(s) didn't match Pod's node affinity/selector.",
+            reason="FailedScheduling",
+        )
+    ]
+    return _unscheduled(
+        c,
+        node_affinity_required=("environment", "production"),
+        nodes=[make_node(name="master", cordoned=True)]
+        + [make_node(name=f"worker-{i}", labels={"environment": "staging"}) for i in range(3)],
+    )
+
+
+def r8_neither_selector_nor_affinity_present() -> FakeKubernetesClient:
+    """The scheduler claims a mismatch, but the Pod spec has neither a nodeSelector nor an
+    affinity rule -- must abstain, not fabricate one."""
+    c = FakeKubernetesClient()
+    c.events = [
+        make_event(
+            "0/4 nodes are available: 3 node(s) didn't match Pod's node affinity/selector.",
+            reason="FailedScheduling",
+        )
+    ]
+    return _unscheduled(c, nodes=[make_node(name="worker-1")])
+
+
+def r9_anti_affinity_conflict() -> FakeKubernetesClient:
+    c = FakeKubernetesClient()
+    c.events = [
+        make_event(
+            "0/4 nodes are available: 1 node(s) were unschedulable, 3 node(s) didn't match pod anti-affinity rules.",
+            reason="FailedScheduling",
+        )
+    ]
+    return _unscheduled(
+        c,
+        nodes=[make_node(name="master", cordoned=True)] + [make_node(name=f"worker-{i}") for i in range(3)],
+    )
+
+
+def r10_pv_bound_elsewhere() -> FakeKubernetesClient:
+    c = FakeKubernetesClient()
+    c.events = [
+        make_event("0/4 nodes are available: pod has unbound immediate PersistentVolumeClaims.", reason="FailedScheduling")
+    ]
+    return _unscheduled(
+        c,
+        pvc_claim_names=["demo-pvc"],
+        pvcs=[make_pvc(name="demo-pvc", phase="Pending", storage_class_name="standard")],
+        pvs=[make_pv(name="only-pv", storage_class_name="standard", bound_claim_name="other-pvc")],
+    )
+
+
+def r10_no_matching_pv() -> FakeKubernetesClient:
+    c = FakeKubernetesClient()
+    c.events = [
+        make_event("0/4 nodes are available: pod has unbound immediate PersistentVolumeClaims.", reason="FailedScheduling")
+    ]
+    return _unscheduled(
+        c,
+        pvc_claim_names=["demo-pvc"],
+        pvcs=[make_pvc(name="demo-pvc", phase="Pending", storage_class_name="fast-ssd")],
+        pvs=[make_pv(name="only-pv", storage_class_name="standard")],  # no PV matches "fast-ssd" at all
+    )
+
+
+def scheduling_blocked_no_event_found() -> FakeKubernetesClient:
+    """Missing-evidence case: the pod is unscheduled, but no FailedScheduling event was
+    collected at all (e.g. expired) -- must abstain explicitly, not guess a cause."""
+    c = FakeKubernetesClient()
+    c.events = []
+    return _unscheduled(c, nodes=[make_node(name="worker-1")])
+
+
+def scheduling_blocked_nodes_unavailable() -> FakeKubernetesClient:
+    """Partial-collection-failure case: the FailedScheduling event is present, but the Node
+    list call itself fails (RBAC denial) -- R5 must abstain citing the gap, not claim a count."""
+    c = FakeKubernetesClient()
+    c.events = [make_event("0/4 nodes are available: 4 node(s) were unschedulable.", reason="FailedScheduling")]
+    c.pod = make_pod(unscheduled=True)
+    c.nodes_error = ApiForbiddenError("nodes is forbidden for this user")
+    return _with_owner_chain(c)

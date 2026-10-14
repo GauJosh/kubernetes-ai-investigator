@@ -75,14 +75,24 @@ def _resolve_json_pointer(payload: Any, json_pointer: str) -> Any:
 def resolve_pointer(payload: Any, pointer: Pointer) -> str | None:
     """Resolve a locator's pointer against a payload. Returns None if it is out of bounds.
 
-    Only string results are returned -- a pointer resolving to a nested object or number is
-    treated as unresolved, since nothing in this project's rule bank cites a non-leaf value.
+    A ``FieldPath`` may resolve to a string (returned as-is) or a scalar leaf -- bool, int, or
+    float (e.g. ``spec.unschedulable: true``, Milestone 2's R5) -- returned as its canonical
+    JSON text ("true", "4"), so a Finding can cite it precisely. A pointer resolving to a
+    nested object, list, or null is still treated as unresolved: nothing in this project's
+    rule bank cites a non-scalar value, and "null" is indistinguishable from "absent" in a way
+    that would be misleading to quote as evidence.
     """
     if isinstance(pointer, LineRange):
         return _resolve_line_range(payload, pointer)
     if isinstance(pointer, FieldPath):
         resolved = _resolve_json_pointer(payload, pointer.json_pointer)
-        return resolved if isinstance(resolved, str) else None
+        if isinstance(resolved, str):
+            return resolved
+        if isinstance(resolved, bool):
+            return "true" if resolved else "false"
+        if isinstance(resolved, (int, float)):
+            return str(resolved)
+        return None
     return None  # pragma: no cover -- Pointer is a closed discriminated union
 
 

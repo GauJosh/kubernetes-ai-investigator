@@ -1,4 +1,4 @@
-"""Collection orchestration: exactly the six approved calls, bounded, partial-failure-safe.
+"""Collection orchestration: the approved calls, bounded, partial-failure-safe.
 
 docs/research/read-only-access-matrix.md §3's collection order is followed directly: the Pod
 first (everything else is derived from it), then events (always attempted -- useful even when
@@ -6,12 +6,19 @@ the Pod itself could not be read), then logs/ReplicaSet/ServiceAccount (derived 
 own fields), then Deployment (derived from the ReplicaSet). A call that was never attempted
 because its prerequisite was missing is not recorded as a failure -- there is nothing dishonest
 about not having tried something that had no input to try with.
+
+Milestone 2 additions (Node, PersistentVolumeClaim, PersistentVolume -- see §7 of the matrix
+document) are gated, not unconditional: they are only attempted when the Pod's own status
+already shows a scheduling-blocked signal (``phase == "Pending"`` and a ``PodScheduled: False``
+condition). A healthy or already-running pod's investigation never issues the two cluster-scoped
+list calls at all.
 """
 
 from __future__ import annotations
 
 from ..models.evidence import CollectionOutcome, CollectionStatus
 from ..models.refs import ApiCallRef, ObjectRef
+from ..pod_status import is_scheduling_blocked
 from .client import (
     DEFAULT_LOG_SINCE_SECONDS,
     DEFAULT_LOG_TAIL_LINES,
@@ -112,5 +119,32 @@ def collect_pod_evidence(
     sa_name = pod_payload.get("spec", {}).get("serviceAccountName") or "default"
     sa_ref = ObjectRef(api_group="", api_version="v1", kind="ServiceAccount", namespace=namespace, name=sa_name)
     outcomes.append(run_call(sa_ref, lambda: k8s.get_service_account(namespace, sa_name)))
+
+    # --- Milestone 2: Node / PersistentVolumeClaim / PersistentVolume, gated -------------------
+    if is_scheduling_blocked(pod_payload):
+        # PersistentVolumeClaim(s) -- by name, from the Pod's own volumes, one GET per claim.
+        pvc_names = [
+            v["persistentVolumeClaim"]["claimName"]
+            for v in (pod_payload.get("spec", {}).get("volumes") or [])
+            if v.get("persistentVolumeClaim", {}).get("claimName")
+        ]
+        for pvc_name in pvc_names:
+            pvc_ref = ObjectRef(
+                api_group="", api_version="v1", kind="PersistentVolumeClaim",
+                namespace=namespace, name=pvc_name,
+            )
+            outcomes.append(
+                run_call(pvc_ref, lambda n=pvc_name: k8s.get_persistent_volume_claim(namespace, n))
+            )
+
+        # Node -- cluster-scoped list, only `list` is ever called (see matrix §7.1).
+        nodes_ref = ApiCallRef(verb="list", path="/api/v1/nodes", params={})
+        outcomes.append(run_call(nodes_ref, lambda: k8s.list_nodes()))
+
+        # PersistentVolume -- cluster-scoped list, only when the pod actually references a PVC
+        # (no PVC means R10 cannot apply, so there is nothing to check PVs against).
+        if pvc_names:
+            pv_ref = ApiCallRef(verb="list", path="/api/v1/persistentvolumes", params={})
+            outcomes.append(run_call(pv_ref, lambda: k8s.list_persistent_volumes()))
 
     return outcomes

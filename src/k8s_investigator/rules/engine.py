@@ -1,9 +1,16 @@
-"""The deterministic rule engine: R1-R4, owner-chain facts, and contradiction detection.
+"""The deterministic rule engine: R1-R10, owner-chain facts, and contradiction detection.
 
 Every rule here is a pure function of (bundle, relationships) -> list[Finding]: no network
 calls, no datetime.now(), no randomness (docs/phase-0.8-mvp-blueprint.md §E's invariants). A
 rule whose required evidence is missing or unavailable abstains or downgrades its claim --
 it never guesses.
+
+R1-R4 (Startup-fault) and R5-R10 (Scheduling-fault, Milestone 2) are evaluated independently and
+are naturally non-overlapping in practice: an unscheduled Pod has not yet started any container,
+so its containerStatuses list is empty and the R1-R4 per-container loop below finds nothing to
+evaluate; evaluate_scheduling (rules/scheduling.py) internally checks
+pod_status.is_scheduling_blocked and returns [] immediately for any pod that is not Pending/
+unscheduled, so calling it unconditionally here is safe and does not need its own branch.
 """
 
 from __future__ import annotations
@@ -12,7 +19,7 @@ from ..models.evidence import ContradictionEdge, EvidenceBundle, EvidenceItem, E
 from ..models.findings import Finding, FindingKind
 from ..graph import RelationshipFacts, resolve_relationships
 from .base import field_locator, line_locator, make_finding
-from .contradictions import detect_contradictions
+from .contradictions import detect_contradictions, detect_scheduling_contradictions
 from .patterns import (
     AUTH_FAILURE_SUBSTRINGS,
     CRASH_LOG_SUBSTRINGS,
@@ -22,6 +29,7 @@ from .patterns import (
     PULL_FAILURE_WAITING_REASONS,
     matches_any,
 )
+from .scheduling import evaluate_scheduling, find_scheduling_event
 
 
 def evaluate_bundle(bundle: EvidenceBundle) -> tuple[list[Finding], list[ContradictionEdge]]:
@@ -64,7 +72,14 @@ def evaluate_bundle(bundle: EvidenceBundle) -> tuple[list[Finding], list[Contrad
                     )
                 )
 
+    findings.extend(evaluate_scheduling(pod, relationships))
+
     contradictions = detect_contradictions(pod, container_statuses, relationships.event_items)
+    scheduling_event = find_scheduling_event(relationships.event_items)
+    if scheduling_event is not None:
+        contradictions.extend(
+            detect_scheduling_contradictions(pod, scheduling_event, relationships.node_items)
+        )
     return findings, contradictions
 
 

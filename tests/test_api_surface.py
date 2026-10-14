@@ -1,10 +1,15 @@
 """The application API-call-surface test -- correction 4 of revision 2.
 
 Named precisely for what it proves: that *this project's own code* cannot issue a call outside
-the approved six-method surface. It proves nothing about what RBAC grant is actually bound to a
-deployed ServiceAccount -- that is a separate, later validation step (RBAC policy review, then
-live authorization testing), named but not performed here, per
-docs/phase-0.8-mvp-blueprint.md §H revision 2.
+the approved surface. It proves nothing about what RBAC grant is actually bound to a deployed
+ServiceAccount -- that is a separate, later validation step (RBAC policy review, then live
+authorization testing), named but not performed here, per docs/phase-0.8-mvp-blueprint.md §H
+revision 2.
+
+Milestone 2 extends the approved surface by exactly three methods (documented, with their
+required RBAC, in docs/research/read-only-access-matrix.md §7, written before this collector
+code was enabled) -- the six Milestone 1 methods and the three Milestone 2 methods are kept as
+separate sets below so a future reviewer can see exactly what each milestone added.
 """
 
 from __future__ import annotations
@@ -19,7 +24,7 @@ from k8s_investigator.collector.client import KubernetesClient
 from .conftest import collect_and_build
 from .fixtures import scenarios
 
-APPROVED_METHODS = {
+MILESTONE_1_METHODS = {
     "get_pod",
     "list_events_for_pod",
     "get_pod_log",
@@ -27,6 +32,14 @@ APPROVED_METHODS = {
     "get_deployment",
     "get_service_account",
 }
+
+MILESTONE_2_METHODS = {
+    "get_persistent_volume_claim",
+    "list_nodes",
+    "list_persistent_volumes",
+}
+
+APPROVED_METHODS = MILESTONE_1_METHODS | MILESTONE_2_METHODS
 
 # Any of these appearing in the collector's source would mean a write, exec, attach,
 # port-forward, or eviction call exists -- none should, anywhere in this codebase.
@@ -65,12 +78,35 @@ def test_collector_only_calls_approved_methods_end_to_end():
         scenarios.r3_service_account_unavailable,
         scenarios.r4_log_pattern_match,
         scenarios.events_plausibly_expired,
+        scenarios.r5_all_nodes_cordoned,
+        scenarios.r10_pv_bound_elsewhere,
+        scenarios.scheduling_blocked_nodes_unavailable,
     ):
         client = build_client()
         collect_and_build(client)
         called_methods = {call[0] for call in client.calls}
         assert called_methods <= APPROVED_METHODS, f"unapproved call(s): {called_methods - APPROVED_METHODS}"
         assert len(client.calls) > 0  # sanity -- the scenario actually exercised the collector
+
+
+def test_milestone_2_calls_are_gated_not_unconditional():
+    """docs/research/read-only-access-matrix.md §7.2: Node/PersistentVolume(Claim) must only
+    be called when the Pod is actually scheduling-blocked -- never for a healthy or
+    already-running pod's investigation."""
+    for build_client in (scenarios.healthy_pod, scenarios.r1_dns_failure, scenarios.r4_log_pattern_match):
+        client = build_client()
+        collect_and_build(client)
+        called = {c[0] for c in client.calls}
+        assert called.isdisjoint(MILESTONE_2_METHODS), (
+            f"{build_client.__name__}: unexpected Milestone 2 call(s) {called & MILESTONE_2_METHODS} "
+            "for a non-scheduling-blocked pod"
+        )
+
+    # and the inverse: a scheduling-blocked pod *does* reach the gated calls
+    client = scenarios.r5_all_nodes_cordoned()
+    collect_and_build(client)
+    called = {c[0] for c in client.calls}
+    assert "list_nodes" in called
 
 
 def test_no_write_or_interactive_call_in_collector_source():
