@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "k8s-investigator"
+version = "0.1.0"
+description = "Evidence-first, read-only Kubernetes investigation engine (Milestone 1: Startup-fault rules)"
+requires-python = ">=3.10"
+readme = "README.md"
+dependencies = [
+    "pydantic>=2.6,<3",
+    "kubernetes>=29,<32",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<9"]
+
+[project.scripts]
+investigate = "k8s_investigator.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/k8s_investigator"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
