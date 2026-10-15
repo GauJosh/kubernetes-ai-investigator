@@ -221,12 +221,13 @@ plugins natively: any executable file on your `PATH` named `kubectl-<name>` beco
 script does exactly one thing: it `exec`s the already-installed `kai` (falling back to
 `investigate`) with the exact same arguments, unchanged.
 
-**Requires:** a POSIX shell (`bash`) to *run the plugin form* — on Windows, use WSL or Git Bash
-for `kubectl kai ...`, or simply call `kai`/`investigate` directly, which needs no shell script
-at all and already works natively there. `kai` itself must already be installed (see
-Installation above); the plugin does nothing on its own.
+`kai` itself must already be installed (see Installation above) — the plugin forwards to it
+and does nothing on its own.
 
-**Install:**
+### Linux / Mac
+
+Works natively — `kubectl`'s plugin discovery on these platforms checks the real POSIX
+executable bit, which `chmod +x` sets directly.
 
 ```bash
 cp integrations/kubectl/kubectl-kai /usr/local/bin/kubectl-kai
@@ -234,11 +235,39 @@ chmod +x /usr/local/bin/kubectl-kai
 kubectl plugin list   # should now list kubectl-kai
 ```
 
-**End-to-end example** (identical to calling `kai` directly, just through `kubectl`):
-
 ```bash
 kubectl kai pod rag-service -n devops-genai
 kubectl kai pod my-pod -n my-ns --from-bundle saved-bundle.json
+```
+
+### Windows
+
+**Requires WSL.** This was tested directly, not assumed: on native Windows, `kubectl.exe`'s
+plugin lookup only recognizes real Windows executables (`.exe`/`.bat`/`.cmd`) — a `chmod +x`'d
+shell script is never picked up as a plugin, even when it's invoked from Git Bash and even
+though the script itself runs fine there. Running `kubectl kai pod ...` against the native
+Windows `kubectl.exe` fails with `error: unknown command "kai" for "kubectl"` regardless of
+which shell you launch it from. The only way to get the actual `kubectl kai ...` plugin form
+working on Windows is to run a Linux `kubectl` inside WSL, where `kubectl`'s own plugin lookup
+uses real Linux executable-bit semantics (the Linux/Mac steps above apply unchanged once you're
+inside a WSL shell using its own `kubectl`):
+
+```bash
+# from inside a WSL terminal, using WSL's own kubectl (not the Windows one)
+wsl
+cp integrations/kubectl/kubectl-kai /usr/local/bin/kubectl-kai
+chmod +x /usr/local/bin/kubectl-kai
+kubectl plugin list   # should now list kubectl-kai
+kubectl kai pod rag-service -n devops-genai
+```
+
+**If you're on native Windows (PowerShell, cmd, or Git Bash) without WSL**, skip the plugin
+entirely — `kai` and `investigate` are native Windows executables already (`kai.exe`), need no
+shell script, and work identically either way:
+
+```powershell
+kai pod rag-service -n devops-genai
+kai pod my-pod -n my-ns --from-bundle saved-bundle.json
 ```
 
 This also composes naturally with an existing diagnostic shell pipeline — e.g. investigate

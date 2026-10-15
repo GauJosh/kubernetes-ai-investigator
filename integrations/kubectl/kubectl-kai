@@ -20,9 +20,12 @@
 #   kubectl kai pod rag-service -n devops-genai
 #   kubectl kai pod my-pod -n my-ns --from-bundle saved-bundle.json
 #
-# Requires a POSIX shell (bash). On Windows, use WSL or Git Bash to run this plugin, or just
-# call `kai`/`investigate` directly -- the CLI itself has no such requirement and works natively
-# on Windows without this wrapper at all.
+# Requires a POSIX shell (bash). On native Windows, kubectl.exe's plugin lookup only recognizes
+# real Windows executables (.exe/.bat/.cmd) -- it will NOT discover this script as a plugin even
+# from Git Bash, even once it's chmod +x'd. The `kubectl kai ...` plugin form only works on
+# Windows via WSL, using WSL's own kubectl (see the main README's kubectl plugin integration
+# section for exact steps). Outside WSL, skip this script and call `kai`/`investigate` directly
+# instead -- the CLI itself has no such requirement and already works natively on Windows.
 
 set -euo pipefail
 
