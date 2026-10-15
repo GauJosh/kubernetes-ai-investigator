@@ -142,7 +142,16 @@ below.
   modifying the cluster) and verified the layer's safety properties — citations are rejected
   without repair when invalid, and a successful API call is never confused with an accepted
   hypothesis — though no AI hypothesis has yet been confirmed reaching a final report through
-  live testing. See `docs/phase-0.11-ai-hypothesis-layer-design.md` and
+  live testing. A live call that completes successfully but ends with zero accepted hypotheses
+  used to be a single, ambiguous `SUCCEEDED` with an empty list — Phase 0.16 added
+  `ai_hypothesis_outcome` (`ABSTAINED`/`ACCEPTED`/`PARTIAL_ACCEPTANCE`/`ALL_REJECTED`, set only
+  alongside `SUCCEEDED`) and a bounded `ai_hypothesis_rejection_reasons` list (e.g.
+  `INVALID_CITATION_REFERENCE`, `EVIDENCE_VALIDATION_FAILED`, `UNGROUNDED_CONFIDENCE` — never
+  raw candidate text or evidence content) so a report can finally say *why* nothing was
+  accepted, without changing what gets accepted or rejected. Both fields default to
+  `None`/`[]` and are absent from any report saved before this change — a report that predates
+  them still parses and renders exactly as it always has. See
+  `docs/phase-0.11-ai-hypothesis-layer-design.md` and
   `docs/phase-0.12-citation-reference-increment-notes.md` for the full record.
 - No database, message broker, or web service — this is a CLI that reads evidence and writes
   files.

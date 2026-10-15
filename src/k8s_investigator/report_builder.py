@@ -8,7 +8,12 @@ from datetime import datetime, timezone
 
 from .models.evidence import ContradictionEdge, EvidenceBundle, EvidenceStatus
 from .models.findings import Finding, FindingKind
-from .models.report import AIHypothesisRunStatus, InvestigationReport
+from .models.report import (
+    AIHypothesisOutcome,
+    AIHypothesisRejectionReason,
+    AIHypothesisRunStatus,
+    InvestigationReport,
+)
 from .timeline import tag
 from .validation import validate_findings
 
@@ -20,16 +25,19 @@ def build_report(
     *,
     ai_hypothesis_status: AIHypothesisRunStatus = AIHypothesisRunStatus.NOT_ATTEMPTED,
     ai_hypothesis_error: str | None = None,
+    ai_hypothesis_outcome: AIHypothesisOutcome | None = None,
+    ai_hypothesis_rejection_reasons: list[AIHypothesisRejectionReason] | None = None,
 ) -> InvestigationReport:
     """Validates every finding's evidence locators before building the report. Raises the
     underlying typed error (see errors.py) if any finding does not survive validation --
     an invalid finding is never shown to a user as if it were a result.
 
-    ``ai_hypothesis_status``/``ai_hypothesis_error`` are supplied by the caller (``cli.py``),
-    which is the only place that knows whether AI hypothesis generation was even attempted and
-    how it went -- this function only assembles what it is given. Every existing call site that
-    omits these two keyword arguments gets exactly Milestone 1-2/Phase 0.11 behavior
-    (NOT_ATTEMPTED, no error), unchanged.
+    ``ai_hypothesis_status``/``ai_hypothesis_error``/``ai_hypothesis_outcome``/
+    ``ai_hypothesis_rejection_reasons`` are all supplied by the caller (``cli.py``), which is the
+    only place that knows whether AI hypothesis generation was even attempted and how it went --
+    this function only assembles what it is given. Every existing call site that omits all four
+    keyword arguments gets exactly Milestone 1-2/Phase 0.11 behavior (NOT_ATTEMPTED, no error, no
+    outcome), unchanged.
     """
     validate_findings(findings, bundle)
 
@@ -49,6 +57,8 @@ def build_report(
         ai_hypotheses=ai_hypotheses,
         ai_hypothesis_status=ai_hypothesis_status,
         ai_hypothesis_error=ai_hypothesis_error,
+        ai_hypothesis_outcome=ai_hypothesis_outcome,
+        ai_hypothesis_rejection_reasons=ai_hypothesis_rejection_reasons or [],
         evidence_gaps=evidence_gaps,
         contradictions=contradictions,
         next_steps=_derive_next_steps(deterministic, observed, evidence_gaps, contradictions),

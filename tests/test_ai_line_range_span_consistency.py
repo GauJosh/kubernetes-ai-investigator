@@ -148,7 +148,7 @@ def test_exact_traceback_quote_with_correctly_widened_range_accepted_end_to_end(
         [_ref_candidate(bundle, log_item.id, [_ERROR_LINE, _CONTINUATION_LINE])]
     )
 
-    results = generate_ai_hypotheses(bundle, [make_marker_deterministic_finding()], client, model_identifier="model:test@v1")
+    results = generate_ai_hypotheses(bundle, [make_marker_deterministic_finding()], client, model_identifier="model:test@v1").accepted
 
     assert len(results) == 1
     assert results[0].evidence_locators[0].quoted_text == _FULL_QUOTE
@@ -173,7 +173,7 @@ def test_correct_quote_with_undersized_range_rejected_end_to_end():
     client = FakeHypothesisModelClient()
     client.response = json.dumps([_candidate(log_item.id, _ERROR_LINE, _ERROR_LINE, _FULL_QUOTE)])
 
-    results = generate_ai_hypotheses(bundle, [make_marker_deterministic_finding()], client, model_identifier="model:test@v1")
+    results = generate_ai_hypotheses(bundle, [make_marker_deterministic_finding()], client, model_identifier="model:test@v1").accepted
 
     assert results == []  # rejected, not repaired/widened -- requirement 3
 
@@ -211,7 +211,7 @@ def test_wrong_starting_line_rejected_end_to_end():
         [_candidate(log_item.id, _WRONG_LINE, _WRONG_LINE, _TRACEBACK_LINES[_ERROR_LINE])]
     )
 
-    results = generate_ai_hypotheses(bundle, [make_marker_deterministic_finding()], client, model_identifier="model:test@v1")
+    results = generate_ai_hypotheses(bundle, [make_marker_deterministic_finding()], client, model_identifier="model:test@v1").accepted
 
     assert results == []
 
@@ -286,7 +286,7 @@ def test_redacted_evidence_end_to_end_via_generate_ai_hypotheses():
     quote = redacted_text_line1 + "\n" + "retry pending"
     client.response = json.dumps([_candidate(log_item.id, 1, 2, quote)])
 
-    results = generate_ai_hypotheses(bundle, [make_marker_deterministic_finding()], client, model_identifier="model:test@v1")
+    results = generate_ai_hypotheses(bundle, [make_marker_deterministic_finding()], client, model_identifier="model:test@v1").accepted
 
     assert results == []
 
@@ -308,7 +308,7 @@ def test_mixed_batch_span_mismatch_wrong_line_and_valid_citation_only_valid_surv
         ]
     )
 
-    ai_findings = generate_ai_hypotheses(bundle, [make_marker_deterministic_finding()], client, model_identifier="model:test@v1")
+    ai_findings = generate_ai_hypotheses(bundle, [make_marker_deterministic_finding()], client, model_identifier="model:test@v1").accepted
     assert len(ai_findings) == 1
     assert ai_findings[0].evidence_locators[0].quoted_text == _FULL_QUOTE
 

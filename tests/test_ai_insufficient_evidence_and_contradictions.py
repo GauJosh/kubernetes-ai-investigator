@@ -189,7 +189,7 @@ def test_high_confidence_with_no_deterministic_finding_rejected_end_to_end():
     client = FakeHypothesisModelClient()
     client.response = json.dumps([_candidate(pod.id, "HIGH")])
 
-    results = generate_ai_hypotheses(bundle, [], client, model_identifier="model:test@v1")
+    results = generate_ai_hypotheses(bundle, [], client, model_identifier="model:test@v1").accepted
 
     assert results == []
 
@@ -200,7 +200,7 @@ def test_medium_confidence_with_no_deterministic_finding_accepted_end_to_end():
     client = FakeHypothesisModelClient()
     client.response = json.dumps([_candidate(pod.id, "MEDIUM")])
 
-    results = generate_ai_hypotheses(bundle, [], client, model_identifier="model:test@v1")
+    results = generate_ai_hypotheses(bundle, [], client, model_identifier="model:test@v1").accepted
 
     assert len(results) == 1
     assert results[0].confidence == Confidence.MEDIUM
@@ -216,7 +216,7 @@ def test_high_confidence_accepted_end_to_end_when_a_deterministic_finding_exists
 
     results = generate_ai_hypotheses(
         bundle, [make_marker_deterministic_finding()], client, model_identifier="model:test@v1",
-    )
+    ).accepted
 
     assert len(results) == 1
     assert results[0].confidence == Confidence.HIGH
@@ -234,7 +234,7 @@ def test_citing_contested_evidence_without_limitation_is_rejected():
 
     results = generate_ai_hypotheses(
         bundle, [], client, model_identifier="model:test@v1", contradictions=contradictions,
-    )
+    ).accepted
 
     assert results == []
 
@@ -250,7 +250,7 @@ def test_citing_contested_evidence_with_limitation_is_accepted():
 
     results = generate_ai_hypotheses(
         bundle, [], client, model_identifier="model:test@v1", contradictions=contradictions,
-    )
+    ).accepted
 
     assert len(results) == 1
 
@@ -266,7 +266,7 @@ def test_citing_uncontested_evidence_is_unaffected_by_unrelated_contradictions()
 
     results = generate_ai_hypotheses(
         bundle, [], client, model_identifier="model:test@v1", contradictions=contradictions,
-    )
+    ).accepted
 
     assert len(results) == 1
 
@@ -279,7 +279,7 @@ def test_no_contradictions_at_all_is_unaffected_regression():
     client = FakeHypothesisModelClient()
     client.response = json.dumps([_candidate(pod.id, "MEDIUM", limitation=None)])
 
-    results = generate_ai_hypotheses(bundle, [], client, model_identifier="model:test@v1")
+    results = generate_ai_hypotheses(bundle, [], client, model_identifier="model:test@v1").accepted
 
     assert len(results) == 1
 
@@ -311,7 +311,7 @@ def test_mixed_batch_overconfident_unacknowledged_and_valid_only_valid_survives_
 
     ai_findings = generate_ai_hypotheses(
         bundle, [], client, model_identifier="model:test@v1", contradictions=contradictions,
-    )
+    ).accepted
     assert len(ai_findings) == 1
     assert ai_findings[0].confidence == Confidence.LOW
 

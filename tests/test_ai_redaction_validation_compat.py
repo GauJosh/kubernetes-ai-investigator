@@ -73,7 +73,7 @@ def test_citing_the_non_redacted_field_still_validates_normally():
     pointer = {"pointer_type": "field_path", "json_pointer": "/status/containerStatuses/0/state/waiting/reason"}
     client.response = json.dumps([_candidate(clean_item.id, pointer, "CrashLoopBackOff")])
 
-    results = generate_ai_hypotheses(bundle, [], client, model_identifier="model:test@v1")
+    results = generate_ai_hypotheses(bundle, [], client, model_identifier="model:test@v1").accepted
 
     assert len(results) == 1
     assert results[0].kind == FindingKind.AI_HYPOTHESIS
@@ -95,7 +95,7 @@ def test_citing_exactly_the_redaction_placeholder_the_model_was_shown_is_safely_
     pointer = {"pointer_type": "field_path", "json_pointer": "/spec/containers/0/env/0/value"}
     client.response = json.dumps([_candidate(secret_item.id, pointer, shown_value)])
 
-    results = generate_ai_hypotheses(bundle, [], client, model_identifier="model:test@v1")
+    results = generate_ai_hypotheses(bundle, [], client, model_identifier="model:test@v1").accepted
 
     assert results == []  # rejected, exactly like any other hallucinated/stale citation
 
@@ -118,7 +118,7 @@ def test_a_hallucinated_redacted_citation_never_reaches_or_breaks_build_report()
         ]
     )
 
-    ai_findings = generate_ai_hypotheses(bundle, [], client, model_identifier="model:test@v1")
+    ai_findings = generate_ai_hypotheses(bundle, [], client, model_identifier="model:test@v1").accepted
     assert len(ai_findings) == 1  # only the valid one survived
 
     from k8s_investigator.models.report import AIHypothesisRunStatus

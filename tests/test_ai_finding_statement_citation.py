@@ -171,7 +171,7 @@ def test_r1_shaped_case_quoting_container_state_statement_is_rejected_end_to_end
 
     results = generate_ai_hypotheses(
         bundle, [observed, make_marker_deterministic_finding()], client, model_identifier="model:test@v1",
-    )
+    ).accepted
 
     assert results == []
 
@@ -193,7 +193,7 @@ def test_r4_shaped_case_quoting_an_observed_fact_statement_about_a_log_is_reject
         [_candidate(pod.id, "Container 'server' is crash-looping, and its logs were checked, but no recognized fatal-error pattern was found.", "MEDIUM")]
     )
 
-    results = generate_ai_hypotheses(bundle, [insufficient_evidence_fact], client, model_identifier="model:test@v1")
+    results = generate_ai_hypotheses(bundle, [insufficient_evidence_fact], client, model_identifier="model:test@v1").accepted
 
     assert results == []
 
@@ -219,7 +219,7 @@ def test_r6_shaped_case_quoting_a_capacity_statement_with_contradiction_present_
 
     results = generate_ai_hypotheses(
         bundle, [capacity_fact], client, model_identifier="model:test@v1", contradictions=contradictions,
-    )
+    ).accepted
 
     assert results == []
 
@@ -236,7 +236,7 @@ def test_a_genuine_source_quote_that_happens_to_differ_from_any_statement_is_sti
 
     results = generate_ai_hypotheses(
         bundle, [observed, make_marker_deterministic_finding()], client, model_identifier="model:test@v1",
-    )
+    ).accepted
 
     assert len(results) == 1
     assert results[0].evidence_locators[0].quoted_text == _REAL_REASON_VALUE
@@ -251,7 +251,7 @@ def test_high_confidence_genuine_quote_accepted_when_a_deterministic_finding_exi
 
     results = generate_ai_hypotheses(
         bundle, [observed, make_marker_deterministic_finding()], client, model_identifier="model:test@v1",
-    )
+    ).accepted
 
     assert len(results) == 1
 
@@ -273,7 +273,7 @@ def test_mixed_batch_statement_quote_and_genuine_quote_only_the_genuine_one_surv
 
     ai_findings = generate_ai_hypotheses(
         bundle, [observed, make_marker_deterministic_finding()], client, model_identifier="model:test@v1",
-    )
+    ).accepted
     assert len(ai_findings) == 1
     assert ai_findings[0].evidence_locators[0].quoted_text == _REAL_REASON_VALUE
 

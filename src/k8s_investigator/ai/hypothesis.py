@@ -29,22 +29,29 @@ default pipeline path -- a caller must explicitly invoke it with a real
 from __future__ import annotations
 
 import json
+from typing import NamedTuple
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from ..canonical import content_hash
 from ..errors import (
     CitationReferenceEvidenceMismatchError,
+    EvidenceLocatorOutOfBoundsError,
+    EvidenceQuoteMismatchError,
+    EvidenceReferenceError,
     FindingStatementCitedAsEvidenceError,
     InvestigatorError,
+    LineRangeSpanMismatchError,
     MalformedCitationReferenceSelectionError,
     UnacknowledgedContradictionError,
     UngroundedConfidenceError,
+    UngroundedFindingError,
     UnknownCitationReferenceError,
 )
 from ..models.evidence import ContradictionEdge, EvidenceBundle
 from ..models.findings import Confidence, Finding, FindingKind
 from ..models.locators import EvidenceLocator, FieldPath, LineRange
+from ..models.report import AIHypothesisOutcome, AIHypothesisRejectionReason
 from ..validation import validate_finding_references
 from .model_client import HypothesisModelClient
 from .model_input import build_model_input
@@ -186,13 +193,26 @@ def _resolve_candidate_locators(
     return locators
 
 
-def parse_candidates(raw_response: str) -> list[RawHypothesisCandidate]:
+class ParsedCandidates(NamedTuple):
+    """``parse_candidates``'s own account of what it kept and what it dropped -- an explicit,
+    bounded signal from the parser itself, never re-inferred later by diffing array lengths
+    against a separate re-parse of ``raw_response`` (Phase 0.16: that approach was considered
+    and rejected as an "ambiguous count heuristic" in favor of this)."""
+
+    candidates: list[RawHypothesisCandidate]
+    malformed_count: int  # top-level array elements that did not match RawHypothesisCandidate's
+    # shape at all (e.g. missing a required field) -- dropped before ever becoming one
+
+
+def parse_candidates(raw_response: str) -> ParsedCandidates:
     """Parse the model's raw text into typed candidates.
 
     Raises ``HypothesisParseError`` only when the response as a whole cannot be understood
     (invalid JSON, or valid JSON that is not an array). An individual array element that does
     not match ``RawHypothesisCandidate`` is dropped and the rest of the array is still
-    processed -- one malformed candidate must not void an otherwise-usable response.
+    processed -- one malformed candidate must not void an otherwise-usable response -- but
+    unlike before Phase 0.16, that drop is now counted (``ParsedCandidates.malformed_count``),
+    not silently lost.
     """
     try:
         data = json.loads(raw_response)
@@ -205,12 +225,13 @@ def parse_candidates(raw_response: str) -> list[RawHypothesisCandidate]:
         )
 
     candidates: list[RawHypothesisCandidate] = []
+    malformed_count = 0
     for raw_candidate in data:
         try:
             candidates.append(RawHypothesisCandidate.model_validate(raw_candidate))
         except ValidationError:
-            continue
-    return candidates
+            malformed_count += 1
+    return ParsedCandidates(candidates=candidates, malformed_count=malformed_count)
 
 
 def make_ai_hypothesis_finding(
@@ -317,6 +338,64 @@ def _dedup_key(finding: Finding) -> tuple[str, frozenset[str]]:
     return (finding.produced_by, frozenset(finding.evidence_ids))
 
 
+#: Exception type -> AIHypothesisRejectionReason, in the fixed order checked by
+#: _classify_rejection. Grounded directly in the existing pipeline's own exceptions -- this
+#: table never changes what is accepted or rejected, only how a rejection already happening
+#: today is labeled.
+_REJECTION_REASON_BY_EXCEPTION: tuple[tuple[tuple[type[Exception], ...], AIHypothesisRejectionReason], ...] = (
+    (
+        (
+            UnknownCitationReferenceError,
+            CitationReferenceEvidenceMismatchError,
+            MalformedCitationReferenceSelectionError,
+        ),
+        AIHypothesisRejectionReason.INVALID_CITATION_REFERENCE,
+    ),
+    (
+        (FindingStatementCitedAsEvidenceError,),
+        AIHypothesisRejectionReason.UNSUPPORTED_FINDING_STATEMENT,
+    ),
+    (
+        (
+            EvidenceReferenceError,
+            EvidenceLocatorOutOfBoundsError,
+            EvidenceQuoteMismatchError,
+            LineRangeSpanMismatchError,
+            UngroundedFindingError,
+        ),
+        AIHypothesisRejectionReason.EVIDENCE_VALIDATION_FAILED,
+    ),
+    ((UngroundedConfidenceError,), AIHypothesisRejectionReason.UNGROUNDED_CONFIDENCE),
+    ((UnacknowledgedContradictionError,), AIHypothesisRejectionReason.UNACKNOWLEDGED_CONTRADICTION),
+)
+
+
+def _classify_rejection(exc: Exception) -> AIHypothesisRejectionReason:
+    """Map an exception already raised by the existing pipeline to one fixed, bounded reason
+    code. Never inspects ``exc``'s own message -- only its type -- so nothing it returns can
+    ever carry raw candidate text, evidence content, or a credential that happened to appear in
+    an exception's string form. ``OTHER`` is a safety net for a plain ``ValueError`` not raised
+    by any of the checks named above (e.g. ``Finding``'s own "no evidence_locators"/"no
+    confidence" guards) -- expected to be rare, never meant to be the common case.
+    """
+    for exception_types, reason in _REJECTION_REASON_BY_EXCEPTION:
+        if isinstance(exc, exception_types):
+            return reason
+    return AIHypothesisRejectionReason.OTHER
+
+
+class AIHypothesisGenerationResult(NamedTuple):
+    """``generate_ai_hypotheses``'s full result -- not just the accepted findings, but an
+    explicit, bounded account of what happened to every candidate the model returned (Phase
+    0.16). ``outcome`` and ``rejection_reasons`` are derived entirely from ``accepted`` and the
+    parser's own counts -- see ``generate_ai_hypotheses`` for exactly how.
+    """
+
+    accepted: list[Finding]
+    outcome: AIHypothesisOutcome
+    rejection_reasons: list[AIHypothesisRejectionReason]
+
+
 def generate_ai_hypotheses(
     bundle: EvidenceBundle,
     findings: list[Finding],
@@ -324,9 +403,9 @@ def generate_ai_hypotheses(
     *,
     model_identifier: str,
     contradictions: list[ContradictionEdge] | None = None,
-) -> list[Finding]:
+) -> AIHypothesisGenerationResult:
     """The full, opt-in orchestration: build input -> one model call -> parse -> promote ->
-    validate -> dedup -> sort.
+    validate -> dedup -> sort -> classify.
 
     ``contradictions`` is ``evaluate_bundle``'s own second return value -- pass it through so
     the model is actually shown what it is expected to acknowledge (see
@@ -340,24 +419,42 @@ def generate_ai_hypotheses(
     rendered statement instead of real evidence content
     (``_check_quote_not_a_finding_statement``), a HIGH confidence claim with no deterministic
     grounding (``_check_confidence_requires_deterministic_grounding``), or citing contested
-    evidence with no acknowledgement (``_check_contradiction_acknowledged``) is dropped
-    silently -- rejected, not corrected and not surfaced, exactly like a rule-engine bug is
-    never allowed to reach a report. An empty return value is this layer's abstention
-    representation: a legitimate "the model produced no hypothesis meeting the bar" result,
-    not an error.
+    evidence with no acknowledgement (``_check_contradiction_acknowledged``) is dropped --
+    rejected, not corrected and not surfaced in its own raw form, exactly like a rule-engine bug
+    is never allowed to reach a report. Phase 0.16 changes only how this is *labeled* in the
+    returned result, never which candidates are accepted or rejected: a one-line bounded reason
+    (``AIHypothesisRejectionReason``, via ``_classify_rejection``) is recorded for every dropped
+    candidate, never the candidate's own text or the exception's message.
+
+    A dedup drop (an already-*valid* candidate that exactly duplicates an already-accepted one)
+    is not counted as a rejection at all -- it is redundancy, not a failure; see ``outcome``'s
+    ``ACCEPTED`` case, which permits dedup drops but requires zero rejections.
+
+    ``outcome`` is derived purely from counts the parser and this loop already produce, never
+    by re-inferring anything from raw list lengths after the fact:
+    - 0 total candidates (parsed.candidates empty AND parsed.malformed_count == 0) -> ABSTAINED
+    - candidates present, 0 accepted -> ALL_REJECTED
+    - candidates present, >=1 accepted, >=1 rejection -> PARTIAL_ACCEPTANCE
+    - candidates present, >=1 accepted, 0 rejections -> ACCEPTED
 
     Raises ``HypothesisParseError`` if the model's response as a whole could not be understood
-    at all -- deliberately not caught here; see that class's docstring for why.
+    at all -- deliberately not caught here; see that class's docstring for why. There is no
+    outcome for that case -- the caller (``cli.py``) reports it as ``AIHypothesisRunStatus.FAILED``,
+    which never carries an outcome at all (``models.report.InvestigationReport``'s own pairing
+    rule enforces this).
     """
     contradictions = contradictions or []
     model_input = build_model_input(bundle, findings, contradictions=contradictions)
     raw_response = client.generate(model_input)
-    candidates = parse_candidates(raw_response)
+    parsed = parse_candidates(raw_response)
     catalog = _build_ref_catalog(model_input)
 
     accepted: list[Finding] = []
+    rejection_reasons: list[AIHypothesisRejectionReason] = [
+        AIHypothesisRejectionReason.MALFORMED_CANDIDATE_SHAPE
+    ] * parsed.malformed_count
     seen: set[tuple[str, frozenset[str]]] = set()
-    for candidate in candidates:
+    for candidate in parsed.candidates:
         try:
             resolved_locators = _resolve_candidate_locators(candidate, catalog)
             finding = make_ai_hypothesis_finding(candidate, model_identifier, resolved_locators)
@@ -369,14 +466,28 @@ def generate_ai_hypotheses(
             validate_finding_references(finding, bundle)
             _check_confidence_requires_deterministic_grounding(finding, findings)
             _check_contradiction_acknowledged(finding, contradictions)
-        except (ValueError, InvestigatorError):
+        except (ValueError, InvestigatorError) as exc:
+            rejection_reasons.append(_classify_rejection(exc))
             continue
 
         key = _dedup_key(finding)
         if key in seen:
-            continue
+            continue  # redundant with an already-accepted candidate -- not a rejection
         seen.add(key)
         accepted.append(finding)
 
     accepted.sort(key=lambda f: _CONFIDENCE_RANK[f.confidence])
-    return accepted
+
+    total_candidates = len(parsed.candidates) + parsed.malformed_count
+    if total_candidates == 0:
+        outcome = AIHypothesisOutcome.ABSTAINED
+    elif not accepted:
+        outcome = AIHypothesisOutcome.ALL_REJECTED
+    elif rejection_reasons:
+        outcome = AIHypothesisOutcome.PARTIAL_ACCEPTANCE
+    else:
+        outcome = AIHypothesisOutcome.ACCEPTED
+
+    return AIHypothesisGenerationResult(
+        accepted=accepted, outcome=outcome, rejection_reasons=rejection_reasons
+    )

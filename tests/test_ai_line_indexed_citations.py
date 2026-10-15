@@ -121,7 +121,7 @@ def test_postgresql_traceback_single_line_ref_is_accepted():
 
     results = generate_ai_hypotheses(
         bundle, [make_marker_deterministic_finding()], client, model_identifier="model:test@v1",
-    )
+    ).accepted
 
     assert len(results) == 1
     assert results[0].kind == FindingKind.AI_HYPOTHESIS
@@ -141,7 +141,7 @@ def test_a_ref_for_the_wrong_line_cites_that_lines_real_content_not_the_target()
 
     results = generate_ai_hypotheses(
         bundle, [make_marker_deterministic_finding()], client, model_identifier="model:test@v1",
-    )
+    ).accepted
 
     assert len(results) == 1  # accepted -- it genuinely cites line 2's own real text
     assert results[0].evidence_locators[0].quoted_text == _TRACEBACK_LINES[_WRONG_LINE]
@@ -162,7 +162,7 @@ def test_postgresql_traceback_two_line_refs_resolve_the_full_two_line_quote():
 
     results = generate_ai_hypotheses(
         bundle, [make_marker_deterministic_finding()], client, model_identifier="model:test@v1",
-    )
+    ).accepted
 
     assert len(results) == 1
     assert results[0].evidence_locators[0].quoted_text == _FULL_QUOTE
@@ -181,7 +181,7 @@ def test_two_refs_given_out_of_order_still_resolve_correctly():
 
     results = generate_ai_hypotheses(
         bundle, [make_marker_deterministic_finding()], client, model_identifier="model:test@v1",
-    )
+    ).accepted
 
     assert len(results) == 1
     assert results[0].evidence_locators[0].quoted_text == _FULL_QUOTE
@@ -201,7 +201,7 @@ def test_duplicate_text_at_different_lines_gets_distinct_refs_and_resolves_corre
 
     results = generate_ai_hypotheses(
         bundle, [make_marker_deterministic_finding()], client, model_identifier="model:test@v1",
-    )
+    ).accepted
 
     assert len(results) == 1
     assert results[0].evidence_locators[0].pointer == LineRange(start_line=3, end_line=3)
@@ -217,7 +217,7 @@ def test_unknown_reference_id_is_rejected_not_substituted():
 
     results = generate_ai_hypotheses(
         bundle, [make_marker_deterministic_finding()], client, model_identifier="model:test@v1",
-    )
+    ).accepted
 
     assert results == []
 
@@ -242,7 +242,7 @@ def test_reference_belonging_to_another_evidence_item_is_rejected():
 
     results = generate_ai_hypotheses(
         bundle, [make_marker_deterministic_finding()], client, model_identifier="model:test@v1",
-    )
+    ).accepted
 
     assert results == []
 
@@ -256,7 +256,7 @@ def test_non_contiguous_reference_selection_is_rejected():
 
     results = generate_ai_hypotheses(
         bundle, [make_marker_deterministic_finding()], client, model_identifier="model:test@v1",
-    )
+    ).accepted
 
     assert results == []
 
@@ -269,7 +269,7 @@ def test_duplicate_reference_in_one_selection_is_rejected():
 
     results = generate_ai_hypotheses(
         bundle, [make_marker_deterministic_finding()], client, model_identifier="model:test@v1",
-    )
+    ).accepted
 
     assert results == []
 
@@ -313,7 +313,7 @@ def test_redacted_line_has_no_ref_at_all_and_cannot_be_selected():
 
     results = generate_ai_hypotheses(
         bundle, [make_marker_deterministic_finding()], client, model_identifier="model:test@v1",
-    )
+    ).accepted
 
     assert results == []
 
@@ -329,7 +329,7 @@ def test_non_redacted_line_adjacent_to_a_redacted_one_is_still_fully_citable():
 
     results = generate_ai_hypotheses(
         bundle, [make_marker_deterministic_finding()], client, model_identifier="model:test@v1",
-    )
+    ).accepted
 
     assert len(results) == 1
     assert results[0].evidence_locators[0].quoted_text == "Connection refused"
@@ -361,7 +361,7 @@ def test_line_cut_by_truncation_has_no_ref_and_cannot_be_selected():
 
     results = generate_ai_hypotheses(
         bundle, [make_marker_deterministic_finding()], client, model_identifier="model:test@v1",
-    )
+    ).accepted
 
     assert results == []
 
@@ -383,7 +383,7 @@ def test_mixed_batch_unknown_cross_item_and_valid_refs_only_valid_survives_into_
 
     ai_findings = generate_ai_hypotheses(
         bundle, [make_marker_deterministic_finding()], client, model_identifier="model:test@v1",
-    )
+    ).accepted
     assert len(ai_findings) == 1
 
     report = build_report(bundle, ai_findings, [], ai_hypothesis_status=AIHypothesisRunStatus.SUCCEEDED)
@@ -424,5 +424,5 @@ def test_field_path_citation_against_structured_evidence_is_unaffected():
             }
         ]
     )
-    results = generate_ai_hypotheses(bundle, [make_marker_deterministic_finding()], client, model_identifier="model:test@v1")
+    results = generate_ai_hypotheses(bundle, [make_marker_deterministic_finding()], client, model_identifier="model:test@v1").accepted
     assert len(results) == 1

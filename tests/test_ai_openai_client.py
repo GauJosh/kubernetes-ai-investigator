@@ -229,7 +229,7 @@ def test_end_to_end_valid_openai_style_response_produces_an_accepted_hypothesis(
 
     results = generate_ai_hypotheses(
         bundle, [make_marker_deterministic_finding()], client, model_identifier="model:openai/gpt-test"
-    )
+    ).accepted
 
     assert len(results) == 1
     assert results[0].kind == FindingKind.AI_HYPOTHESIS
@@ -250,7 +250,7 @@ def test_end_to_end_schema_passing_but_hallucinated_citation_is_still_rejected()
     raw = _FakeRawClient(content=json.dumps({"hypotheses": [candidate]}))
     client = OpenAIHypothesisModelClient(api_key="unused", model="gpt-test", raw_client=raw)
 
-    results = generate_ai_hypotheses(bundle, [], client, model_identifier="model:openai/gpt-test")
+    results = generate_ai_hypotheses(bundle, [], client, model_identifier="model:openai/gpt-test").accepted
 
     assert results == []
 

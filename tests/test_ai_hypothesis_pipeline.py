@@ -79,26 +79,33 @@ def test_parse_candidates_rejects_a_json_object_instead_of_array():
 def test_parse_candidates_accepts_a_well_formed_array():
     pod = _pod_item()
     raw = json.dumps([_valid_candidate_json(pod.id)])
-    candidates = parse_candidates(raw)
-    assert len(candidates) == 1
-    assert isinstance(candidates[0], RawHypothesisCandidate)
-    assert candidates[0].confidence == Confidence.MEDIUM
+    result = parse_candidates(raw)
+    assert len(result.candidates) == 1
+    assert isinstance(result.candidates[0], RawHypothesisCandidate)
+    assert result.candidates[0].confidence == Confidence.MEDIUM
+    assert result.malformed_count == 0
 
 
 def test_parse_candidates_drops_one_malformed_candidate_but_keeps_the_rest():
+    """Phase 0.16: the drop is now counted (malformed_count), not just silently absent from
+    the surviving candidates list -- an explicit signal from the parser itself, not inferred
+    later by diffing array lengths against a separate re-parse."""
     pod = _pod_item()
     good = _valid_candidate_json(pod.id)
     malformed = {"statement": "missing required fields"}  # no evidence_locators, no confidence
     raw = json.dumps([good, malformed])
 
-    candidates = parse_candidates(raw)
+    result = parse_candidates(raw)
 
-    assert len(candidates) == 1
-    assert candidates[0].statement == good["statement"]
+    assert len(result.candidates) == 1
+    assert result.candidates[0].statement == good["statement"]
+    assert result.malformed_count == 1
 
 
 def test_parse_candidates_empty_array_is_valid_and_yields_no_candidates():
-    assert parse_candidates("[]") == []
+    result = parse_candidates("[]")
+    assert result.candidates == []
+    assert result.malformed_count == 0
 
 
 # --- make_ai_hypothesis_finding: code-controlled identity/provenance --------------------------
@@ -160,7 +167,7 @@ def test_generate_ai_hypotheses_accepts_a_valid_candidate():
     client = FakeHypothesisModelClient()
     client.response = json.dumps([_valid_candidate_json(pod.id)])
 
-    results = generate_ai_hypotheses(bundle, [], client, model_identifier="model:test@v1")
+    results = generate_ai_hypotheses(bundle, [], client, model_identifier="model:test@v1").accepted
 
     assert len(results) == 1
     assert results[0].kind == FindingKind.AI_HYPOTHESIS
@@ -173,7 +180,7 @@ def test_generate_ai_hypotheses_rejects_candidate_citing_unknown_evidence_id():
     client = FakeHypothesisModelClient()
     client.response = json.dumps([_valid_candidate_json("does-not-exist-in-bundle")])
 
-    results = generate_ai_hypotheses(bundle, [], client, model_identifier="model:test@v1")
+    results = generate_ai_hypotheses(bundle, [], client, model_identifier="model:test@v1").accepted
 
     assert results == []
 
@@ -186,7 +193,7 @@ def test_generate_ai_hypotheses_rejects_candidate_with_stale_quote():
     bad["evidence_locators"][0]["quoted_text"] = "Running"  # the real value is "Pending"
     client.response = json.dumps([bad])
 
-    results = generate_ai_hypotheses(bundle, [], client, model_identifier="model:test@v1")
+    results = generate_ai_hypotheses(bundle, [], client, model_identifier="model:test@v1").accepted
 
     assert results == []
 
@@ -199,7 +206,7 @@ def test_generate_ai_hypotheses_rejects_candidate_with_out_of_bounds_pointer():
     bad["evidence_locators"][0]["pointer"] = {"pointer_type": "field_path", "json_pointer": "/status/doesNotExist"}
     client.response = json.dumps([bad])
 
-    results = generate_ai_hypotheses(bundle, [], client, model_identifier="model:test@v1")
+    results = generate_ai_hypotheses(bundle, [], client, model_identifier="model:test@v1").accepted
 
     assert results == []
 
@@ -210,7 +217,7 @@ def test_generate_ai_hypotheses_empty_response_is_abstention_not_error():
     client = FakeHypothesisModelClient()
     client.response = "[]"
 
-    results = generate_ai_hypotheses(bundle, [], client, model_identifier="model:test@v1")
+    results = generate_ai_hypotheses(bundle, [], client, model_identifier="model:test@v1").accepted
 
     assert results == []
 
@@ -238,7 +245,7 @@ def test_generate_ai_hypotheses_collapses_exact_duplicate_candidates():
     reworded_duplicate["statement"] = "Differently worded, same evidence, same confidence."
     client.response = json.dumps([same_evidence_same_confidence, reworded_duplicate])
 
-    results = generate_ai_hypotheses(bundle, [], client, model_identifier="model:test@v1")
+    results = generate_ai_hypotheses(bundle, [], client, model_identifier="model:test@v1").accepted
 
     assert len(results) == 1
 
@@ -250,7 +257,7 @@ def test_generate_ai_hypotheses_keeps_distinct_hypotheses_over_different_evidenc
     client = FakeHypothesisModelClient()
     client.response = json.dumps([_valid_candidate_json(pod_a.id), _valid_candidate_json(pod_b.id)])
 
-    results = generate_ai_hypotheses(bundle, [], client, model_identifier="model:test@v1")
+    results = generate_ai_hypotheses(bundle, [], client, model_identifier="model:test@v1").accepted
 
     assert len(results) == 2
 
@@ -269,7 +276,7 @@ def test_generate_ai_hypotheses_sorts_by_confidence_high_first():
 
     results = generate_ai_hypotheses(
         bundle, [make_marker_deterministic_finding()], client, model_identifier="model:test@v1"
-    )
+    ).accepted
 
     assert [f.confidence for f in results] == [Confidence.HIGH, Confidence.LOW]
 
@@ -285,7 +292,7 @@ def test_generate_ai_hypotheses_stable_sort_preserves_model_order_within_a_tier(
     second["statement"] = "second returned by the model"
     client.response = json.dumps([first, second])
 
-    results = generate_ai_hypotheses(bundle, [], client, model_identifier="model:test@v1")
+    results = generate_ai_hypotheses(bundle, [], client, model_identifier="model:test@v1").accepted
 
     assert [f.statement for f in results] == [first["statement"], second["statement"]]
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from .models.evidence import EvidenceStatus
 from .models.findings import Finding
-from .models.report import AIHypothesisRunStatus, InvestigationReport
+from .models.report import AIHypothesisOutcome, AIHypothesisRunStatus, InvestigationReport
 
 
 def render_text(report: InvestigationReport) -> str:
@@ -41,10 +41,28 @@ def render_text(report: InvestigationReport) -> str:
         lines.append(f"  (AI hypothesis generation FAILED: {report.ai_hypothesis_error})")
         lines.append("  (the deterministic findings above are unaffected by this failure)")
     elif not report.ai_hypotheses:
-        lines.append("  (none -- the model produced no hypothesis meeting the evidence bar)")
+        # ai_hypothesis_outcome is None for any report serialized before Phase 0.16 (or any
+        # report that otherwise never set it) -- falls through to the original, unchanged
+        # message so an old saved report still renders exactly as it always has.
+        if report.ai_hypothesis_outcome == AIHypothesisOutcome.ABSTAINED:
+            lines.append("  (none -- the model explicitly returned no candidates)")
+        elif report.ai_hypothesis_outcome == AIHypothesisOutcome.ALL_REJECTED:
+            reasons = ", ".join(r.value for r in report.ai_hypothesis_rejection_reasons)
+            lines.append(
+                f"  (none -- {len(report.ai_hypothesis_rejection_reasons)} candidate(s) "
+                f"rejected: {reasons})"
+            )
+        else:
+            lines.append("  (none -- the model produced no hypothesis meeting the evidence bar)")
     else:
         for finding in report.ai_hypotheses:
             lines.extend(_render_finding(finding))
+        if report.ai_hypothesis_outcome == AIHypothesisOutcome.PARTIAL_ACCEPTANCE:
+            reasons = ", ".join(r.value for r in report.ai_hypothesis_rejection_reasons)
+            lines.append(
+                f"  ({len(report.ai_hypothesis_rejection_reasons)} additional candidate(s) "
+                f"rejected: {reasons})"
+            )
     lines.append("")
 
     lines.append("EVIDENCE GAPS")

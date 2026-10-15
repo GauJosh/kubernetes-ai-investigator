@@ -20,7 +20,7 @@ from .errors import BundleExportSanitizationError, BundleExportWriteError, Inves
 from .export_sanitization import sanitize_bundle_for_export
 from .models.evidence import EvidenceBundle
 from .models.refs import ObjectRef
-from .models.report import AIHypothesisRunStatus
+from .models.report import AIHypothesisOutcome, AIHypothesisRejectionReason, AIHypothesisRunStatus
 from .rendering import render_text
 from .report_builder import build_report
 from .rules.engine import evaluate_bundle
@@ -119,13 +119,18 @@ def main(argv: list[str] | None = None) -> int:
 
     ai_status = AIHypothesisRunStatus.NOT_ATTEMPTED
     ai_error: str | None = None
+    ai_outcome: AIHypothesisOutcome | None = None
+    ai_rejection_reasons: list[AIHypothesisRejectionReason] = []
     if args.with_ai_hypotheses:
-        findings, ai_status, ai_error = _run_ai_hypotheses(bundle, findings, contradictions)
+        findings, ai_status, ai_error, ai_outcome, ai_rejection_reasons = _run_ai_hypotheses(
+            bundle, findings, contradictions
+        )
 
     try:
         report = build_report(
             bundle, findings, contradictions,
             ai_hypothesis_status=ai_status, ai_hypothesis_error=ai_error,
+            ai_hypothesis_outcome=ai_outcome, ai_hypothesis_rejection_reasons=ai_rejection_reasons,
         )
     except InvestigatorError as exc:
         print(f"internal error: {exc}", file=sys.stderr)
@@ -165,13 +170,20 @@ def main(argv: list[str] | None = None) -> int:
 
 def _run_ai_hypotheses(
     bundle: EvidenceBundle, findings: list, contradictions: list
-) -> tuple[list, AIHypothesisRunStatus, str | None]:
+) -> tuple[list, AIHypothesisRunStatus, str | None, AIHypothesisOutcome | None, list[AIHypothesisRejectionReason]]:
     """Attempt AI hypothesis generation. Never raises -- any failure (unconfigured provider,
     a real client's network/auth error, an unrecoverable malformed model response) is caught
     here and reported as AIHypothesisRunStatus.FAILED with the error's own message, so the
     deterministic findings already computed are always still returned and always still shipped
     in the report. A failure is never collapsed into "the AI layer ran and found nothing" --
-    see models/report.py::AIHypothesisRunStatus for why that distinction matters.
+    see models/report.py::AIHypothesisRunStatus for why that distinction matters. A FAILED
+    result never carries an outcome or rejection reasons (both are empty/None) -- those are only
+    meaningful once a call actually completed (Phase 0.16).
+
+    The stderr summary line printed on a SUCCEEDED run (outcome + counts only -- never a raw
+    candidate statement, evidence payload, or exception message) is this project's one new
+    piece of AI-path observability from Phase 0.16; the existing FAILED-path warning is
+    unchanged.
 
     Imports the client factory lazily, mirroring _load_or_collect_bundle's lazy import of the
     live Kubernetes client: --from-bundle-only, deterministic-only usage should never require
@@ -182,14 +194,25 @@ def _run_ai_hypotheses(
 
     try:
         client, model_identifier = build_client_from_env()
-        ai_findings = generate_ai_hypotheses(
+        result = generate_ai_hypotheses(
             bundle, findings, client, model_identifier=model_identifier, contradictions=contradictions,
         )
     except Exception as exc:  # noqa: BLE001 -- an AI-path failure must degrade honestly, not crash the CLI
         print(f"warning: AI hypothesis generation failed: {exc}", file=sys.stderr)
-        return findings, AIHypothesisRunStatus.FAILED, str(exc)
+        return findings, AIHypothesisRunStatus.FAILED, str(exc), None, []
 
-    return findings + ai_findings, AIHypothesisRunStatus.SUCCEEDED, None
+    print(
+        f"AI hypothesis generation: {result.outcome.value} "
+        f"({len(result.accepted)} accepted, {len(result.rejection_reasons)} rejected)",
+        file=sys.stderr,
+    )
+    return (
+        findings + result.accepted,
+        AIHypothesisRunStatus.SUCCEEDED,
+        None,
+        result.outcome,
+        result.rejection_reasons,
+    )
 
 
 def _load_or_collect_bundle(args: argparse.Namespace) -> EvidenceBundle:
