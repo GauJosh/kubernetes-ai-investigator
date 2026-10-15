@@ -31,6 +31,8 @@ def make_pod(
     # only make_pod(running=True) needs this, to express a Running-but-not-ready container.
     service_account_name: str = "default",
     pod_image_pull_secrets: list[str] | None = None,
+    env: list[dict[str, Any]] | None = None,  # export-sanitization tests: a raw env entry list,
+    # e.g. [{"name": "PGVECTOR_DSN", "value": "..."}] -- mirrors a real container's spec.env.
     owner_rs_name: str | None = "demo-rs",
     uid: str = "pod-uid-1",
     creation_timestamp: str | None = None,
@@ -58,15 +60,17 @@ def make_pod(
     for claim_name in (pvc_claim_names or []):
         volumes.append({"name": f"{claim_name}-vol", "persistentVolumeClaim": {"claimName": claim_name}})
 
+    container_spec: dict[str, Any] = {
+        "name": container_name,
+        "image": "example.registry/demo:v1",
+        "resources": {"requests": container_resource_requests} if container_resource_requests else {},
+    }
+    if env is not None:
+        container_spec["env"] = env
+
     spec: dict[str, Any] = {
         "serviceAccountName": service_account_name,
-        "containers": [
-            {
-                "name": container_name,
-                "image": "example.registry/demo:v1",
-                "resources": {"requests": container_resource_requests} if container_resource_requests else {},
-            }
-        ],
+        "containers": [container_spec],
         "imagePullSecrets": [{"name": s} for s in (pod_image_pull_secrets or [])],
         "tolerations": tolerations if tolerations is not None else default_tolerations,
     }

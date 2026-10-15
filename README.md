@@ -85,6 +85,25 @@ investigate investigate pod my-pod --namespace my-ns \
 Kubeconfig discovery follows the official Kubernetes client's normal resolution (in-cluster
 config first, then the standard kubeconfig file/context lookup) — no project-specific override.
 
+**`--save-bundle` writes a *sanitized* bundle by default** (Phase 0.16). A live cluster can
+return genuinely sensitive content that isn't a Kubernetes `Secret` at all — e.g. a plaintext
+database connection string sitting in a Pod's own `env` entry, exactly as this project's own
+live evaluation against a real Minikube workload found. Before writing, the collected bundle is
+passed through `export_sanitization.sanitize_bundle_for_export`, which reuses the same detectors
+the AI-hypothesis layer already uses on its model input (`ai/redaction.py`: URL-userinfo
+credentials, `password=`/`token=`/`secret=`-style assignments in free text, and sensitive
+env-var names) — applied here to every item's payload *and* every raw per-call payload in the
+bundle's `queries` field, not just the parts a Finding happens to cite. If you need the raw,
+unsanitized bundle (e.g. for deep debugging), pass `--allow-unsanitized-bundle-export` alongside
+`--save-bundle`; doing so prints a clear warning to stderr every time, and is only valid together
+with `--save-bundle`. **This redaction is best-effort, not a security boundary** — see
+Limitations below for exactly what it does and does not catch. **A sanitized bundle's id, and
+the id of any item it changed, will differ from the raw bundle's** — ids in this project are
+content hashes (`canonical.py`) that include the payload, so redacted content is, correctly,
+different content. The sanitized bundle is still fully valid and loadable via `--from-bundle`;
+replaying it re-runs the real deterministic rule engine, which never sees sanitized evidence in
+its own evaluation path regardless of what gets written to disk.
+
 **Live collection prerequisites**, per `docs/research/read-only-access-matrix.md` (approved):
 namespace-scoped `get`+`list` on `Pod` (`list` is the R9-follow-up addition — §8 of that
 document; the label selector it uses is a query filter only, never an RBAC boundary), `get` on
@@ -141,10 +160,17 @@ below.
   reported conflict), but does not independently parse the Pod's own `podAntiAffinity` term to
   prove that specific term is what matched.
 - Container logs are treated as potentially sensitive. Collection is bounded (tail lines and a
-  time window), but no automated redaction is applied — redaction is explicitly a secondary
-  safeguard, never a security boundary, per `docs/research/read-only-access-matrix.md` §4. Do not
-  assume a saved bundle or report is safe to share outside the same trust boundary as the cluster
-  itself.
+  time window). `--save-bundle` applies best-effort redaction by default (see Usage above) —
+  but this is explicitly a secondary safeguard, never a security boundary, per
+  `docs/research/read-only-access-matrix.md` §4. Stated limits of what it does **not** catch:
+  bearer tokens or API keys with no recognizable `token=`/`key=`-style prefix, cloud
+  access-key-ID formats, PEM/SSH private key blocks, high-entropy strings with no contextual
+  marker, and a secret split across multiple log lines. **Rendered reports are a separate
+  surface this redaction does not touch at all** — a report only ever contains text a rule
+  actually quoted, and today no rule in this bank quotes an `env` value, but that is a property
+  of the current rule bank, not something this redaction layer enforces. Do not assume a saved
+  bundle or report — sanitized or not — is safe to share outside the same trust boundary as the
+  cluster itself; review before sharing, always.
 - Passing tests in this repository prove the application's own code only calls the approved API
   surface (`tests/test_api_surface.py`) and behaves correctly against synthetic evidence. They
   prove **nothing** about what RBAC grant is actually bound to a deployed ServiceAccount — that is

@@ -16,7 +16,8 @@ from pathlib import Path
 from .bundle_builder import build_bundle
 from .collector.client import DEFAULT_LOG_SINCE_SECONDS, DEFAULT_LOG_TAIL_LINES
 from .collector.collect import collect_pod_evidence
-from .errors import InvestigatorError
+from .errors import BundleExportSanitizationError, BundleExportWriteError, InvestigatorError
+from .export_sanitization import sanitize_bundle_for_export
 from .models.evidence import EvidenceBundle
 from .models.refs import ObjectRef
 from .models.report import AIHypothesisRunStatus
@@ -43,6 +44,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     pod.add_argument(
         "--save-bundle", metavar="PATH", help="save the freshly collected bundle to this path"
+    )
+    pod.add_argument(
+        "--allow-unsanitized-bundle-export",
+        action="store_true",
+        help=(
+            "write the RAW bundle to --save-bundle instead of the sanitized (default) one. "
+            "The raw bundle may contain credentials or other sensitive values exactly as "
+            "collected from the cluster (e.g. a plaintext connection string in a Pod's own env "
+            "var) -- sanitization is best-effort, not a security boundary, so review before "
+            "sharing. Only valid together with --save-bundle."
+        ),
     )
     pod.add_argument("--kubeconfig", default=None, help="path to a kubeconfig file (live collection only)")
     pod.add_argument("--context", default=None, help="kubeconfig context to use (live collection only)")
@@ -84,6 +96,14 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
+    if args.allow_unsanitized_bundle_export and not args.save_bundle:
+        print(
+            "error: --allow-unsanitized-bundle-export is only valid together with "
+            "--save-bundle.",
+            file=sys.stderr,
+        )
+        return 2
+
     try:
         bundle = _load_or_collect_bundle(args)
     except Exception as exc:  # noqa: BLE001 -- a CLI boundary; report, don't crash with a traceback
@@ -114,7 +134,31 @@ def main(argv: list[str] | None = None) -> int:
     _emit(report, args)
 
     if args.save_bundle and not args.from_bundle:
-        Path(args.save_bundle).write_text(bundle.model_dump_json(indent=2))
+        if args.allow_unsanitized_bundle_export:
+            print(
+                "warning: writing an UNSANITIZED evidence bundle -- it may contain credentials "
+                "or other sensitive values exactly as collected from the cluster (e.g. a "
+                "plaintext connection string in a Pod's own env var). Review this file before "
+                "sharing or retaining it.",
+                file=sys.stderr,
+            )
+            bundle_to_save = bundle
+        else:
+            try:
+                bundle_to_save = sanitize_bundle_for_export(bundle)
+                validate_bundle_integrity(bundle_to_save)
+            except Exception as exc:  # noqa: BLE001 -- never let a raw payload fragment reach stderr
+                print(f"error: {BundleExportSanitizationError(type(exc).__name__)}", file=sys.stderr)
+                return 4
+
+        try:
+            Path(args.save_bundle).write_text(bundle_to_save.model_dump_json(indent=2))
+        except Exception as exc:  # noqa: BLE001 -- same rule: type name only, never str(exc)
+            print(
+                f"error: {BundleExportWriteError(type(exc).__name__, raw=args.allow_unsanitized_bundle_export)}",
+                file=sys.stderr,
+            )
+            return 4
 
     return 0
 

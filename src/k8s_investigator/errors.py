@@ -151,6 +151,69 @@ class FindingStatementCitedAsEvidenceError(InvestigatorError):
         )
 
 
+class BundleExportSanitizationError(InvestigatorError):
+    """Sanitizing or integrity-validating a bundle for export failed (the default,
+    sanitized-export path only -- never raised when the raw export was explicitly requested via
+    --allow-unsanitized-bundle-export, since no sanitization is ever attempted in that case).
+
+    The message deliberately never includes the exception's own str() -- only its type name --
+    so a failure in this path can never leak a fragment of the original payload (sensitive or
+    not) into a log line or stderr. There is no raw fallback: a failure here means nothing is
+    written, per the export design's explicit "no raw fallback" requirement.
+    """
+
+    def __init__(self, cause_type: str) -> None:
+        self.cause_type = cause_type
+        super().__init__(
+            f"failed to sanitize the evidence bundle for export ({cause_type}) -- refusing to "
+            "write a raw fallback. Pass --allow-unsanitized-bundle-export if you specifically "
+            "want the raw bundle instead."
+        )
+
+
+class BundleExportWriteError(InvestigatorError):
+    """Writing an already-prepared bundle to disk failed -- either the sanitized bundle
+    (default) or the raw bundle (--allow-unsanitized-bundle-export). ``raw`` states which one
+    accurately, so this is never confused with a sanitization failure (BundleExportSanitizationError)
+    and never claims a raw fallback was refused when raw export was what was actually requested.
+
+    Same rule as above: the message never includes the exception's own str(), only its type
+    name, so a write failure (e.g. an invalid path) can never leak payload content.
+    """
+
+    def __init__(self, cause_type: str, *, raw: bool) -> None:
+        self.cause_type = cause_type
+        self.raw = raw
+        kind = "raw (unsanitized)" if raw else "sanitized"
+        super().__init__(f"failed to write the {kind} evidence bundle to disk ({cause_type}).")
+
+
+class BundleExportUnsupportedContradictionsError(InvestigatorError):
+    """sanitize_bundle_for_export refuses to sanitize a bundle that already has recorded
+    ContradictionEdge entries.
+
+    A ContradictionEdge references two EvidenceItem ids by value, and sanitization can
+    legitimately change an item's id when its payload is redacted (ids are content hashes --
+    see canonical.py). Silently rewriting those references, or leaving them pointing at ids
+    that no longer exist in the sanitized bundle, would both be worse than refusing outright.
+    In this project's current design, contradictions are always computed separately at report
+    time (rules.contradictions) and never persisted onto the bundle before --save-bundle runs --
+    this should never fire today; it exists as a safety rail for any future caller that changes
+    that.
+    """
+
+    def __init__(self, count: int) -> None:
+        self.count = count
+        super().__init__(
+            f"cannot sanitize a bundle for export: it already has {count} recorded "
+            "contradiction edge(s). Contradiction edges reference EvidenceItem ids by value, "
+            "and sanitization can change those ids -- exporting would either silently rewrite "
+            "the edges or leave them pointing at stale, nonexistent items. Contradictions are "
+            "expected to be computed separately at report time, not persisted on the bundle "
+            "before export."
+        )
+
+
 class UnknownCitationReferenceError(InvestigatorError):
     """A line_citations entry named a reference id that was never issued in this model input.
 
