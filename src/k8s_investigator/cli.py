@@ -1,4 +1,13 @@
-"""CLI entry point: ``investigate pod <name> --namespace <ns>``.
+"""CLI entry point: ``kai pod <name> --namespace <ns>``.
+
+Two console scripts point at the same ``main()`` (see ``pyproject.toml``'s ``[project.scripts]``):
+``kai``, the primary, short name, and ``investigate``, kept only as a trivial, backward-compatible
+alias. Neither hardcodes its own name as argparse's ``prog`` -- each shows its own invocation name
+in ``--help`` because argparse derives ``prog`` from ``sys.argv[0]`` by default.
+
+The command hierarchy is intentionally flat: ``<prog> pod <name> ...``, not the earlier
+``investigate investigate pod <name> ...`` double-nesting (the outer "investigate" subcommand
+added nothing a flat structure doesn't already say via the executable's own name).
 
 Supports two evidence sources, per docs/phase-0.8-mvp-blueprint.md's acceptance criteria:
 ``--from-bundle`` runs the deterministic pipeline against an already-collected (or hand-built
@@ -29,23 +38,19 @@ from .validation import validate_bundle_integrity
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="investigate",
         description=(
             "Evidence-first, read-only Kubernetes investigation. Collects a bounded, "
             "frozen snapshot of a Pod's evidence, correlates it deterministically (rules "
             "R1-R11), and produces a report whose findings are always traceable to specific, "
-            "validated evidence -- no AI model is required. Run `investigate investigate pod "
-            "--help` for the full set of options, including offline replay (--from-bundle), "
-            "safe-by-default evidence export (--save-bundle), and optional AI hypotheses "
+            "validated evidence -- no AI model is required. Run `%(prog)s pod --help` for the "
+            "full set of options, including offline replay (--from-bundle), safe-by-default "
+            "evidence export (--save-bundle), and optional AI hypotheses "
             "(--with-ai-hypotheses)."
         ),
     )
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers = parser.add_subparsers(dest="resource", required=True)
 
-    investigate = subparsers.add_parser("investigate", help="run an investigation")
-    investigate_sub = investigate.add_subparsers(dest="resource", required=True)
-
-    pod = investigate_sub.add_parser(
+    pod = subparsers.add_parser(
         "pod",
         help="investigate a single Pod",
         description=(
@@ -100,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    if args.command != "investigate" or args.resource != "pod":
+    if args.resource != "pod":
         parser.print_help(sys.stderr)
         return 2
 

@@ -302,7 +302,7 @@ def test_cli_with_ai_hypotheses_without_provider_reports_failed_not_empty_succes
 
     exit_code = main(
         [
-            "investigate", "pod", "demo-pod", "--namespace", "demo-ns",
+            "pod", "demo-pod", "--namespace", "demo-ns",
             "--from-bundle", str(bundle_path), "--output", "json", "--with-ai-hypotheses",
         ]
     )
@@ -325,7 +325,7 @@ def test_cli_without_the_flag_is_not_attempted_and_unaffected(tmp_path, capsys):
 
     exit_code = main(
         [
-            "investigate", "pod", "demo-pod", "--namespace", "demo-ns",
+            "pod", "demo-pod", "--namespace", "demo-ns",
             "--from-bundle", str(bundle_path), "--output", "json",
         ]
     )
@@ -373,7 +373,7 @@ def test_cli_with_ai_hypotheses_succeeded_end_to_end(tmp_path, capsys, monkeypat
 
     exit_code = main(
         [
-            "investigate", "pod", "demo-pod", "--namespace", "demo-ns",
+            "pod", "demo-pod", "--namespace", "demo-ns",
             "--from-bundle", str(bundle_path), "--output", "json", "--with-ai-hypotheses",
         ]
     )
@@ -406,7 +406,7 @@ def test_cli_with_ai_hypotheses_abstained_outcome_end_to_end(tmp_path, capsys, m
 
     exit_code = main(
         [
-            "investigate", "pod", "demo-pod", "--namespace", "demo-ns",
+            "pod", "demo-pod", "--namespace", "demo-ns",
             "--from-bundle", str(bundle_path), "--output", "json", "--with-ai-hypotheses",
         ]
     )
@@ -449,7 +449,7 @@ def test_cli_with_ai_hypotheses_all_rejected_outcome_end_to_end(tmp_path, capsys
 
     exit_code = main(
         [
-            "investigate", "pod", "demo-pod", "--namespace", "demo-ns",
+            "pod", "demo-pod", "--namespace", "demo-ns",
             "--from-bundle", str(bundle_path), "--output", "json", "--with-ai-hypotheses",
         ]
     )
@@ -498,7 +498,7 @@ def test_cli_with_ai_hypotheses_rejected_candidate_credential_never_appears_in_o
 
     exit_code = main(
         [
-            "investigate", "pod", "demo-pod", "--namespace", "demo-ns",
+            "pod", "demo-pod", "--namespace", "demo-ns",
             "--from-bundle", str(bundle_path), "--output", "both", "--with-ai-hypotheses",
         ]
     )

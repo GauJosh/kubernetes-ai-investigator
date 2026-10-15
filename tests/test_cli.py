@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 
@@ -30,6 +31,18 @@ def _write_bundle(tmp_path, client) -> str:
     return str(path)
 
 
+def test_kai_and_investigate_console_scripts_are_both_registered_to_the_same_entry_point():
+    """Packaging-level guarantee for the kai/investigate split: both console scripts must
+    exist and point at the exact same function, so `investigate` really is a trivial,
+    behavior-identical alias for `kai`, not a second implementation to keep in sync."""
+    import importlib.metadata as md
+
+    dist = md.distribution("k8s-investigator")
+    console_scripts = {ep.name: ep.value for ep in dist.entry_points if ep.group == "console_scripts"}
+    assert console_scripts.get("kai") == "k8s_investigator.cli:main"
+    assert console_scripts.get("investigate") == "k8s_investigator.cli:main"
+
+
 def test_top_level_help_describes_what_the_tool_does(capsys):
     """A brand-new user's first command is often --help -- it must say what this tool is,
     not just list bare subcommand names (regression guard for the MVP quick-start docs)."""
@@ -42,16 +55,40 @@ def test_top_level_help_describes_what_the_tool_does(capsys):
 
 def test_pod_subcommand_help_mentions_offline_replay(capsys):
     with pytest.raises(SystemExit):
-        main(["investigate", "pod", "--help"])
+        main(["pod", "--help"])
     help_text = capsys.readouterr().out
     assert "already-saved EvidenceBundle" in help_text
     assert "--from-bundle" in help_text
 
 
+def test_natural_command_syntax_pod_name_short_namespace_flag(tmp_path, capsys):
+    """The new primary interface: `kai pod <name> -n <namespace> ...` -- no redundant
+    `investigate investigate` nesting, and the short -n flag works exactly like
+    --namespace."""
+    bundle_path = _write_bundle(tmp_path, scenarios.r1_dns_failure())
+    exit_code = main(["pod", "demo-pod", "-n", "demo-ns", "--from-bundle", bundle_path, "--output", "json"])
+    assert exit_code == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["deterministic_findings"][0]["produced_by"] == "rule:R1_dns_failure"
+
+
+def test_no_redundant_command_nesting_in_the_parser():
+    """The old `investigate investigate pod ...` double-nesting must not exist -- `pod` is a
+    direct subcommand, and there is no separate "investigate" subcommand layer to go through
+    first."""
+    from k8s_investigator.cli import build_parser
+
+    parser = build_parser()
+    # argparse exposes registered subparser choices via the first _SubParsersAction found.
+    subparsers_actions = [a for a in parser._actions if isinstance(a, argparse._SubParsersAction)]
+    assert len(subparsers_actions) == 1
+    assert set(subparsers_actions[0].choices) == {"pod"}
+
+
 def test_cli_from_bundle_json_output(tmp_path, capsys):
     bundle_path = _write_bundle(tmp_path, scenarios.r1_dns_failure())
     exit_code = main(
-        ["investigate", "pod", "demo-pod", "--namespace", "demo-ns", "--from-bundle", bundle_path, "--output", "json"]
+        ["pod", "demo-pod", "--namespace", "demo-ns", "--from-bundle", bundle_path, "--output", "json"]
     )
     assert exit_code == 0
     out = capsys.readouterr().out
@@ -64,7 +101,7 @@ def test_cli_from_bundle_json_output(tmp_path, capsys):
 def test_cli_from_bundle_text_output_contains_sections(tmp_path, capsys):
     bundle_path = _write_bundle(tmp_path, scenarios.healthy_pod())
     exit_code = main(
-        ["investigate", "pod", "demo-pod", "--namespace", "demo-ns", "--from-bundle", bundle_path, "--output", "text"]
+        ["pod", "demo-pod", "--namespace", "demo-ns", "--from-bundle", bundle_path, "--output", "text"]
     )
     assert exit_code == 0
     out = capsys.readouterr().out
@@ -77,7 +114,7 @@ def test_cli_writes_to_output_file(tmp_path):
     out_path = tmp_path / "report.json"
     exit_code = main(
         [
-            "investigate", "pod", "demo-pod", "--namespace", "demo-ns",
+            "pod", "demo-pod", "--namespace", "demo-ns",
             "--from-bundle", bundle_path, "--output", "json", "--out", str(out_path),
         ]
     )
@@ -88,7 +125,7 @@ def test_cli_writes_to_output_file(tmp_path):
 
 def test_cli_missing_bundle_file_reports_error_not_traceback(capsys):
     exit_code = main(
-        ["investigate", "pod", "demo-pod", "--namespace", "demo-ns", "--from-bundle", "/does/not/exist.json"]
+        ["pod", "demo-pod", "--namespace", "demo-ns", "--from-bundle", "/does/not/exist.json"]
     )
     assert exit_code == 1
     err = capsys.readouterr().err
@@ -102,7 +139,7 @@ def test_cli_save_bundle_and_from_bundle_combined_is_a_usage_error(tmp_path, cap
     save_path = tmp_path / "should_not_be_written.json"
     exit_code = main(
         [
-            "investigate", "pod", "demo-pod", "--namespace", "demo-ns",
+            "pod", "demo-pod", "--namespace", "demo-ns",
             "--from-bundle", bundle_path, "--save-bundle", str(save_path),
         ]
     )
@@ -129,7 +166,7 @@ def test_cli_save_bundle_default_sanitizes_known_credential(tmp_path, monkeypatc
     save_path = tmp_path / "sanitized.json"
     exit_code = main(
         [
-            "investigate", "pod", "demo-pod", "--namespace", "demo-ns",
+            "pod", "demo-pod", "--namespace", "demo-ns",
             "--save-bundle", str(save_path), "--output", "json",
         ]
     )
@@ -149,7 +186,7 @@ def test_cli_save_bundle_raw_opt_in_writes_unsanitized_and_warns(tmp_path, monke
     save_path = tmp_path / "raw.json"
     exit_code = main(
         [
-            "investigate", "pod", "demo-pod", "--namespace", "demo-ns",
+            "pod", "demo-pod", "--namespace", "demo-ns",
             "--save-bundle", str(save_path), "--allow-unsanitized-bundle-export", "--output", "json",
         ]
     )
@@ -167,7 +204,7 @@ def test_cli_allow_unsanitized_bundle_export_without_save_bundle_is_a_usage_erro
     bundle_path = _write_bundle(tmp_path, scenarios.r1_dns_failure())
     exit_code = main(
         [
-            "investigate", "pod", "demo-pod", "--namespace", "demo-ns",
+            "pod", "demo-pod", "--namespace", "demo-ns",
             "--from-bundle", bundle_path, "--allow-unsanitized-bundle-export",
         ]
     )
@@ -190,7 +227,7 @@ def test_cli_save_bundle_sanitization_failure_never_writes_a_raw_fallback(tmp_pa
     save_path = tmp_path / "should_not_exist.json"
     exit_code = main(
         [
-            "investigate", "pod", "demo-pod", "--namespace", "demo-ns",
+            "pod", "demo-pod", "--namespace", "demo-ns",
             "--save-bundle", str(save_path), "--output", "json",
         ]
     )
@@ -214,7 +251,7 @@ def test_cli_save_bundle_sanitized_write_failure_is_reported_safely_and_distinct
     # tmp_path is a directory, not a file -- writing text to it is a genuine, portable failure.
     exit_code = main(
         [
-            "investigate", "pod", "demo-pod", "--namespace", "demo-ns",
+            "pod", "demo-pod", "--namespace", "demo-ns",
             "--save-bundle", str(tmp_path), "--output", "json",
         ]
     )
@@ -238,7 +275,7 @@ def test_cli_save_bundle_raw_write_failure_is_reported_safely_and_distinctly(
 
     exit_code = main(
         [
-            "investigate", "pod", "demo-pod", "--namespace", "demo-ns",
+            "pod", "demo-pod", "--namespace", "demo-ns",
             "--save-bundle", str(tmp_path), "--allow-unsanitized-bundle-export",
             "--output", "json",
         ]
@@ -261,7 +298,7 @@ def test_cli_documented_offline_example_against_the_committed_bundle(capsys):
     assert _COMMITTED_BUNDLE.exists(), f"README's documented fixture is missing: {_COMMITTED_BUNDLE}"
 
     base_args = [
-        "investigate", "pod", "demo-pod", "--namespace", "demo-ns",
+        "pod", "demo-pod", "--namespace", "demo-ns",
         "--from-bundle", str(_COMMITTED_BUNDLE),
     ]
 

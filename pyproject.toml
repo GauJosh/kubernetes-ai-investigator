@@ -21,7 +21,8 @@ dev = ["pytest>=8,<9"]
 ai = ["openai>=1,<2"]
 
 [project.scripts]
-investigate = "k8s_investigator.cli:main"
+kai = "k8s_investigator.cli:main"
+investigate = "k8s_investigator.cli:main"  # trivial, backward-compatible alias for kai
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/k8s_investigator"]

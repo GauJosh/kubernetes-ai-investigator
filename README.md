@@ -32,7 +32,8 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 ```
 
-This installs the `investigate` console script and the `k8s_investigator` package. Installing
+This installs the `kai` console script (and `investigate`, kept only as a trivial,
+backward-compatible alias for the same command) plus the `k8s_investigator` package. Installing
 the package does **not** require a Kubernetes cluster — the `kubernetes` client library is a
 dependency, but nothing at import or install time contacts a cluster.
 
@@ -53,11 +54,11 @@ exercise.
 pip install -e ".[dev]"
 
 # 2. Discover what the CLI can do
-investigate --help
-investigate investigate pod --help
+kai --help
+kai pod --help
 
 # 3. Investigate a real cluster Pod, saving a sanitized evidence bundle and a report
-investigate investigate pod my-pod --namespace my-ns \
+kai pod my-pod -n my-ns \
     --kubeconfig ~/.kube/config --context my-context \
     --save-bundle my-investigation-bundle.json \
     --out my-investigation-report.txt
@@ -69,18 +70,17 @@ investigate investigate pod my-pod --namespace my-ns \
 export AI_HYPOTHESIS_PROVIDER=openai
 export OPENAI_API_KEY=sk-...
 export AI_HYPOTHESIS_MODEL=gpt-4o-mini
-investigate investigate pod my-pod --namespace my-ns \
+kai pod my-pod -n my-ns \
     --kubeconfig ~/.kube/config --context my-context \
     --with-ai-hypotheses
 
 # 5. Reproduce the investigation entirely offline from the bundle saved in step 3 -- no
 #    cluster access, no AI provider, same deterministic findings every time
-investigate investigate pod my-pod --namespace my-ns \
-    --from-bundle my-investigation-bundle.json
+kai pod my-pod -n my-ns --from-bundle my-investigation-bundle.json
 
 # 6. Don't have a live cluster handy? Try the same offline step against the committed example
 #    bundle (step 5's command, pointed at a real, synthetic, credential-free fixture instead):
-investigate investigate pod demo-pod --namespace demo-ns \
+kai pod demo-pod -n demo-ns \
     --from-bundle tests/fixtures/bundles/r1_dns_failure_bundle.json
 ```
 
@@ -97,7 +97,7 @@ still exits `0` with the full deterministic report intact — see "Understanding
 ### Offline, fixture-based (no cluster required)
 
 This is the primary, fully-tested path for this milestone. Point the CLI at an already-saved
-`EvidenceBundle` JSON file — either one `investigate` saved earlier (`--save-bundle`, on a live
+`EvidenceBundle` JSON file — either one `kai` saved earlier (`--save-bundle`, on a live
 collection only — see below), or the real, committed example bundle at
 `tests/fixtures/bundles/r1_dns_failure_bundle.json` (a small, synthetic DNS-image-pull-failure
 case; nothing in it was collected from a real cluster, and it contains no credentials of any
@@ -106,16 +106,13 @@ configured, and no internal test helper imported — verified by
 `tests/test_cli.py::test_cli_documented_offline_example_against_the_committed_bundle`:
 
 ```bash
-investigate investigate pod demo-pod --namespace demo-ns \
+kai pod demo-pod --namespace demo-ns \
     --from-bundle tests/fixtures/bundles/r1_dns_failure_bundle.json
 ```
 
-(The repeated `investigate investigate` is intentional: `investigate` is the installed command;
-`investigate` is also the CLI's own subcommand name, matching the `investigate pod/<name>`
-phrasing used throughout this project's design documents. `demo-pod`/`demo-ns` only need to
-match this particular bundle's own recorded target for the report to describe itself
-accurately — `--from-bundle` loads the bundle exactly as saved and does not re-collect, so these
-two values are not otherwise used to filter or re-fetch anything.)
+(`demo-pod`/`demo-ns` only need to match this particular bundle's own recorded target for the
+report to describe itself accurately — `--from-bundle` loads the bundle exactly as saved and
+does not re-collect, so these two values are not otherwise used to filter or re-fetch anything.)
 
 This should print a report whose `DETERMINISTIC FINDINGS` section includes a `rule:R1_dns_failure`
 finding, and whose `EVIDENCE GAPS` section honestly shows the one piece of evidence this
@@ -133,7 +130,7 @@ combination immediately with a usage error rather than silently doing nothing.
 ### Live collection (requires a cluster and RBAC — not exercised by this project's own tests)
 
 ```bash
-investigate investigate pod my-pod --namespace my-ns \
+kai pod my-pod --namespace my-ns \
     --kubeconfig ~/.kube/config --context my-context \
     --save-bundle my-investigation-bundle.json
 ```
@@ -179,8 +176,8 @@ below.
 
 `--with-ai-hypotheses` is off by default and never required — the deterministic findings above
 are already a complete, useful report on their own. To turn it on, install the optional `openai`
-dependency and set three environment variables before running `investigate` (only the `openai`
-provider is implemented so far):
+dependency and set three environment variables before running `kai` (only the `openai` provider
+is implemented so far):
 
 ```bash
 pip install -e ".[ai]"   # or add [dev,ai] to the Installation step above
@@ -189,7 +186,7 @@ export AI_HYPOTHESIS_PROVIDER=openai
 export OPENAI_API_KEY=sk-...          # your own OpenAI API key -- never printed or logged
 export AI_HYPOTHESIS_MODEL=gpt-4o-mini # any OpenAI chat model that supports structured output
 
-investigate investigate pod my-pod --namespace my-ns --with-ai-hypotheses \
+kai pod my-pod --namespace my-ns --with-ai-hypotheses \
     --kubeconfig ~/.kube/config --context my-context
 ```
 
@@ -294,7 +291,7 @@ pytest
 ```
 
 All tests run against synthetic `EvidenceBundle` fixtures and a fake Kubernetes client
-(`tests/fakes.py`) — none require a cluster, and none are skipped or marked pending. 333 tests
+(`tests/fakes.py`) — none require a cluster, and none are skipped or marked pending. 336 tests
 pass as of this entry (no live Kubernetes access, no paid model call in that count). See
 `docs/phase-0.9-milestone-1-notes.md` and `docs/phase-0.10-milestone-2-notes.md` for the actual
 test run output from each implementation phase.
@@ -325,7 +322,7 @@ src/k8s_investigator/
   collector/       the narrow Kubernetes client and orchestration (read-only, bounded)
   ai/              optional AI-hypothesis layer (off by default) -- model input projection,
                    candidate parsing/validation, redaction, the OpenAI adapter
-  cli.py           `investigate pod <name> ...`
+  cli.py           `kai pod <name> ...` (also installed as `investigate`, a trivial alias)
 tests/             synthetic fixtures + a fake Kubernetes client; no live cluster
 docs/              the full research, design, and decision record for this project
 ```
