@@ -20,7 +20,14 @@ def render_text(report: InvestigationReport) -> str:
     lines.append("DETERMINISTIC FINDINGS")
     lines.append("-" * 22)
     if not report.deterministic_findings:
-        lines.append("  (none)")
+        if any(f.produced_by == "engine:no_rule_matched" for f in report.observed_facts):
+            lines.append(
+                "  (none -- no rule in this project's bank (R1-R11) recognized this failure "
+                "pattern; see OBSERVED FACTS and NEXT STEPS below. This is not the same as "
+                "confirming there is no cause.)"
+            )
+        else:
+            lines.append("  (none)")
     for finding in report.deterministic_findings:
         lines.extend(_render_finding(finding))
     lines.append("")
@@ -36,7 +43,7 @@ def render_text(report: InvestigationReport) -> str:
     lines.append("AI HYPOTHESES")
     lines.append("-" * 13)
     if report.ai_hypothesis_status == AIHypothesisRunStatus.NOT_ATTEMPTED:
-        lines.append("  (not attempted -- run with --with-ai-hypotheses to enable)")
+        lines.append("  (not attempted -- run with --with-ai to enable)")
     elif report.ai_hypothesis_status == AIHypothesisRunStatus.FAILED:
         lines.append(f"  (AI hypothesis generation FAILED: {report.ai_hypothesis_error})")
         lines.append("  (the deterministic findings above are unaffected by this failure)")

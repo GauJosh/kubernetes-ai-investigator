@@ -209,4 +209,28 @@ EVAL_SCENARIOS: list[EvalScenario] = [
             " evidenced, only the absence of a match."
         ),
     ),
+    _build(
+        "unfamiliar_failure_no_matching_rule",
+        fixture_scenarios.unfamiliar_failure_no_matching_rule(),
+        description=(
+            "Phase 0.17: a container fails to start for a reason genuinely outside every"
+            " category R1-R11 checks (not an image-pull state, not a crash loop, not"
+            " scheduling-blocked, no probe-failure event) -- 'CreateContainerConfigError' with"
+            " a concrete 'configmap not found' event. The engine-level engine:no_rule_matched"
+            " check reports this honestly as an OBSERVED_FACT (zero DETERMINISTIC_FINDING),"
+            " distinct from both an already-explained case and a zero-evidence abstention"
+            " case -- here there IS a specific, citable event, just one no numbered rule"
+            " recognizes."
+        ),
+        expected_ai_behavior=(
+            "May propose a hypothesis grounded in the real 'configmap not found' event -- this"
+            " is exactly the case this project's design intends AI to add value for: a"
+            " plausible explanation for a pattern no deterministic rule covers. No"
+            " DETERMINISTIC_FINDING exists, so HIGH confidence is rejected by the existing"
+            " code-enforced grounding check; MEDIUM or LOW is appropriate. Must not claim the"
+            " missing configmap as a certain, confirmed root cause (that framing belongs to a"
+            " deterministic rule, which none exists for this pattern), and abstaining entirely"
+            " is also a correct, honest outcome if the model is not confident."
+        ),
+    ),
 ]

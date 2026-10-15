@@ -12,9 +12,13 @@ an explicit "insufficient evidence" outcome). Rules R5–R10 diagnose Scheduling
 (node cordon, resource capacity, taint/toleration, node selector/affinity, pod anti-affinity —
 confirmed against real sibling-Pod placement, not just the scheduler's message — unbound
 PersistentVolumeClaim) for Pods that are `Pending` and unscheduled. R11 diagnoses liveness/
-readiness probe failures, correlated with the container's actual status. AI hypotheses
-(`--with-ai-hypotheses`) are entirely optional, off by default, and never required to get a
-useful report. See `docs/phase-0.8-mvp-blueprint.md` for the approved architecture and
+readiness probe failures, correlated with the container's actual status. When a failure doesn't
+match any of R1-R11, the report says so explicitly rather than staying silent or implying the
+Pod is healthy (`engine:no_rule_matched` — see Usage below). AI hypotheses (`--with-ai`) are
+entirely optional, off by default, and never required to get a useful report — and, when
+enabled, can propose a hypothesis for exactly that unrecognized-pattern case too, without
+needing a matching deterministic rule to exist first. See `docs/phase-0.8-mvp-blueprint.md`
+for the approved architecture and
 `docs/phase-0.9-milestone-1-notes.md`/`docs/phase-0.10-milestone-2-notes.md`/
 `docs/phase-0.13-probe-failure-rule-design.md` for what each milestone built.
 
@@ -72,7 +76,7 @@ export OPENAI_API_KEY=sk-...
 export AI_HYPOTHESIS_MODEL=gpt-4o-mini
 kai pod my-pod -n my-ns \
     --kubeconfig ~/.kube/config --context my-context \
-    --with-ai-hypotheses
+    --with-ai
 
 # 5. Reproduce the investigation entirely offline from the bundle saved in step 3 -- no
 #    cluster access, no AI provider, same deterministic findings every time
@@ -174,21 +178,63 @@ below.
 
 ### Enabling AI hypotheses (optional)
 
-`--with-ai-hypotheses` is off by default and never required — the deterministic findings above
-are already a complete, useful report on their own. To turn it on, install the optional `openai`
-dependency and set three environment variables before running `kai` (only the `openai` provider
-is implemented so far):
+`--with-ai` is off by default and never required — the deterministic findings above are
+already a complete, useful report on their own, with or without it. To turn it on, install the
+optional `openai` dependency and set three environment variables before running `kai` (only the
+`openai` provider is implemented so far). `--with-ai-hypotheses` is accepted as a deprecated
+alias for the exact same flag, kept for backward compatibility — prefer `--with-ai` in new
+scripts and documentation.
+
+**Bash / Linux / Mac:**
 
 ```bash
 pip install -e ".[ai]"   # or add [dev,ai] to the Installation step above
 
 export AI_HYPOTHESIS_PROVIDER=openai
-export OPENAI_API_KEY=sk-...          # your own OpenAI API key -- never printed or logged
-export AI_HYPOTHESIS_MODEL=gpt-4o-mini # any OpenAI chat model that supports structured output
+export OPENAI_API_KEY="YOUR_OPENAI_API_KEY"
+export AI_HYPOTHESIS_MODEL=gpt-4o-mini
 
-kai pod my-pod --namespace my-ns --with-ai-hypotheses \
-    --kubeconfig ~/.kube/config --context my-context
+kai pod my-pod -n my-ns --with-ai
 ```
+
+**Windows PowerShell:**
+
+```powershell
+pip install -e ".[ai]"
+
+$env:AI_HYPOTHESIS_PROVIDER = "openai"
+$env:OPENAI_API_KEY = "YOUR_OPENAI_API_KEY"
+$env:AI_HYPOTHESIS_MODEL = "gpt-4o-mini"
+
+kai pod my-pod -n my-ns --with-ai
+```
+
+(`pip install -e ".[ai]"` and the `kai` invocation itself are identical on every platform —
+only how a shell sets an environment variable differs, which is the one thing Bash and
+PowerShell users would otherwise have to translate themselves.)
+
+Please note, plainly:
+
+- **A valid OpenAI API key with API access is required** for the `openai` provider — this
+  project does not provide one, and `AI_HYPOTHESIS_MODEL` names a model accessed entirely
+  through OpenAI's hosted API, never something downloaded or run locally on your machine.
+- **API usage may incur charges on your own OpenAI account.** This project makes exactly one
+  model call per investigation (`max_retries=0` — never silently retried), with a bounded,
+  size-capped input, but it does not set, estimate, or cap your account's billing.
+- **The AI layer sends selected investigation evidence to the configured external provider**
+  (OpenAI) when `--with-ai` is used — the evidence actually collected for that Pod, redacted
+  best-effort (see Limitations below for exactly what that redaction does and does not catch),
+  not a security boundary. Review your organization's data-handling policies before enabling
+  this for real workloads.
+- **Never commit, print, or log a real API key.** Every example above, and every test in this
+  repository, uses the literal placeholder text `"YOUR_OPENAI_API_KEY"` or a synthetic value —
+  never a real key — and `OPENAI_API_KEY` itself is read from the environment only, never
+  written to a bundle, a report, or any file this project produces. This project introduces no
+  secrets manager or configuration framework of its own; use whatever your shell or CI already
+  uses to set environment variables.
+- **Without any of this configuration, and without `--with-ai`, deterministic investigation
+  still works exactly as described everywhere else in this README** — nothing above is a
+  prerequisite for `kai` itself.
 
 If any of the three variables is missing, or the provider name isn't recognized, the CLI
 reports `ai_hypothesis_status: FAILED` with a specific, actionable message and still ships the
@@ -210,6 +256,42 @@ or (for an AI-path failure) a rejected candidate's own text — only enough deta
 problem. If a deterministic rule simply doesn't recognize your evidence, that is not an error at
 all: the report says so explicitly (an `OBSERVED_FACT` naming exactly what was and wasn't
 checked), rather than guessing at a cause or staying silent.
+
+### When no deterministic rule recognizes the failure
+
+R1-R11 each abstain honestly *within their own category* when their own evidence doesn't match
+a known pattern (e.g. a crash-looping container whose logs don't match any known fatal-error
+substring). But a failure that falls entirely outside every category this rule bank checks for
+— not an image-pull state, not a crash loop, not scheduling-blocked, no probe-failure event —
+used to produce no explanation at all beyond the bare container state. It now produces one
+explicit, bank-wide `engine:no_rule_matched` observed fact instead:
+
+```
+DETERMINISTIC FINDINGS
+----------------------
+  (none -- no rule in this project's bank (R1-R11) recognized this failure pattern; see
+  OBSERVED FACTS and NEXT STEPS below. This is not the same as confirming there is no cause.)
+...
+OBSERVED FACTS
+--------------
+  [engine:no_rule_matched] No deterministic rule in this project's rule bank (R1-R11)
+      established a root cause for container(s) server, which are not in a healthy
+      running-and-ready state. This does not mean no cause exists -- it means the collected
+      evidence did not match any of this project's known failure patterns...
+...
+NEXT STEPS
+----------
+  - No deterministic rule recognized this failure pattern -- review the observed facts and
+    evidence gaps above directly, and consider re-running with --with-ai ...
+```
+
+This never produces a `DETERMINISTIC_FINDING` and never fires for a Pod that's actually
+healthy (running and ready) — it only names the gap when something is observably wrong and
+nothing in R1-R11 explained it. This is exactly where `--with-ai` adds value it couldn't add
+before: an AI hypothesis can propose a plausible explanation for this same evidence *without*
+needing a matching deterministic rule to exist first (it still goes through the same citation
+and confidence-grounding validation as every other hypothesis — see Enabling AI hypotheses
+above).
 
 ## kubectl plugin integration (optional)
 
@@ -306,9 +388,10 @@ kubectl get pods -n my-ns --field-selector=status.phase!=Running -o name \
 ```
 
 Everything this project guarantees elsewhere still holds through the plugin: read-only
-collection, AI only runs if you pass `--with-ai-hypotheses` yourself, `--save-bundle` is
-sanitized by default, and `--from-bundle` replays fully offline — the plugin changes none of
-that, it only changes how you spell the command. See `tests/test_kubectl_plugin.py` for the
+collection, AI only runs if you pass `--with-ai` (or the deprecated `--with-ai-hypotheses`
+alias) yourself, `--save-bundle` is sanitized by default, and `--from-bundle` replays fully
+offline — the plugin changes none of that, it only changes how you spell the command, and it
+forwards either AI flag spelling unchanged. See `tests/test_kubectl_plugin.py` for the
 automated tests covering argument forwarding, namespace/Pod-name handling, the AI-not-invoked
 guarantee, and the error message when `kai` isn't installed.
 
@@ -321,8 +404,9 @@ guarantee, and the error message when `kai` isn't installed.
 - `Service`, `EndpointSlice`, `Namespace`, and `ResourceQuota` remain deferred — no evidence
   collected in this project's testing has needed them.
 - The deterministic pipeline remains complete and useful entirely on its own; the AI-hypothesis
-  layer is opt-in (`--with-ai-hypotheses`, off by default) and still never runs in this
-  project's own test suite or by default. Phase 0.11 built the offline machinery
+  layer is opt-in (`--with-ai`, off by default; `--with-ai-hypotheses` still works as a
+  deprecated alias) and still never runs in this project's own test suite or by default.
+  Phase 0.11 built the offline machinery
   (`src/k8s_investigator/ai/`: input projection, candidate parsing, evidence-reference
   validation, deduplication, confidence ranking) and two narrow `Finding` validator rules.
   Phase 0.12 added honest failure reporting (`ai_hypothesis_status`:
@@ -392,7 +476,7 @@ pytest
 ```
 
 All tests run against synthetic `EvidenceBundle` fixtures and a fake Kubernetes client
-(`tests/fakes.py`) — none require a cluster, and none are skipped or marked pending. 342 tests
+(`tests/fakes.py`) — none require a cluster, and none are skipped or marked pending. 354 tests
 pass as of this entry (no live Kubernetes access, no paid model call in that count). See
 `docs/phase-0.9-milestone-1-notes.md` and `docs/phase-0.10-milestone-2-notes.md` for the actual
 test run output from each implementation phase.

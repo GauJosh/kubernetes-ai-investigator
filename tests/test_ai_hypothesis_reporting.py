@@ -291,10 +291,37 @@ def test_build_client_from_env_with_unknown_provider_raises(monkeypatch):
         build_client_from_env()
 
 
-# --- CLI end-to-end: --with-ai-hypotheses without a configured provider is an honest FAILED ---
+# --- CLI end-to-end: --with-ai without a configured provider is an honest FAILED -------------
 
 
-def test_cli_with_ai_hypotheses_without_provider_reports_failed_not_empty_success(tmp_path, capsys, monkeypatch):
+def test_cli_with_ai_without_provider_reports_failed_not_empty_success(tmp_path, capsys, monkeypatch):
+    monkeypatch.delenv("AI_HYPOTHESIS_PROVIDER", raising=False)
+    bundle = collect_and_build(scenarios.r1_dns_failure(), namespace="demo-ns", name="demo-pod")
+    bundle_path = tmp_path / "bundle.json"
+    bundle_path.write_text(bundle.model_dump_json(), encoding="utf-8")
+
+    exit_code = main(
+        [
+            "pod", "demo-pod", "--namespace", "demo-ns",
+            "--from-bundle", str(bundle_path), "--output", "json", "--with-ai",
+        ]
+    )
+
+    assert exit_code == 0  # the deterministic report still ships successfully
+    out = json.loads(capsys.readouterr().out)
+    assert out["ai_hypothesis_status"] == "FAILED"
+    assert out["ai_hypothesis_error"]
+    assert out["ai_hypotheses"] == []
+    assert out["ai_hypothesis_outcome"] is None  # a FAILED run never carries an outcome
+    assert out["ai_hypothesis_rejection_reasons"] == []
+    # The deterministic finding is completely unaffected by the AI-path failure.
+    assert out["deterministic_findings"][0]["produced_by"] == "rule:R1_dns_failure"
+
+
+def test_cli_with_ai_hypotheses_deprecated_alias_still_works_identically(tmp_path, capsys, monkeypatch):
+    """`--with-ai-hypotheses` is kept as a trivial, behavior-identical compatibility alias for
+    `--with-ai` -- same dest, same code path, nothing to keep in sync. This test exercises the
+    OLD spelling specifically (every other test in this file already uses the new one)."""
     monkeypatch.delenv("AI_HYPOTHESIS_PROVIDER", raising=False)
     bundle = collect_and_build(scenarios.r1_dns_failure(), namespace="demo-ns", name="demo-pod")
     bundle_path = tmp_path / "bundle.json"
@@ -307,14 +334,10 @@ def test_cli_with_ai_hypotheses_without_provider_reports_failed_not_empty_succes
         ]
     )
 
-    assert exit_code == 0  # the deterministic report still ships successfully
+    assert exit_code == 0
     out = json.loads(capsys.readouterr().out)
-    assert out["ai_hypothesis_status"] == "FAILED"
+    assert out["ai_hypothesis_status"] == "FAILED"  # identical outcome to the --with-ai test above
     assert out["ai_hypothesis_error"]
-    assert out["ai_hypotheses"] == []
-    assert out["ai_hypothesis_outcome"] is None  # a FAILED run never carries an outcome
-    assert out["ai_hypothesis_rejection_reasons"] == []
-    # The deterministic finding is completely unaffected by the AI-path failure.
     assert out["deterministic_findings"][0]["produced_by"] == "rule:R1_dns_failure"
 
 
@@ -336,7 +359,7 @@ def test_cli_without_the_flag_is_not_attempted_and_unaffected(tmp_path, capsys):
     assert out["ai_hypothesis_error"] is None
 
 
-def test_cli_with_ai_hypotheses_succeeded_end_to_end(tmp_path, capsys, monkeypatch):
+def test_cli_with_ai_succeeded_end_to_end(tmp_path, capsys, monkeypatch):
     """With a (faked) configured client, the full opt-in path renders real hypotheses and a
     SUCCEEDED status -- proving the wiring end-to-end without needing a real provider yet."""
     import json as _json
@@ -374,7 +397,7 @@ def test_cli_with_ai_hypotheses_succeeded_end_to_end(tmp_path, capsys, monkeypat
     exit_code = main(
         [
             "pod", "demo-pod", "--namespace", "demo-ns",
-            "--from-bundle", str(bundle_path), "--output", "json", "--with-ai-hypotheses",
+            "--from-bundle", str(bundle_path), "--output", "json", "--with-ai",
         ]
     )
 
@@ -392,7 +415,7 @@ def test_cli_with_ai_hypotheses_succeeded_end_to_end(tmp_path, capsys, monkeypat
     assert "AI hypothesis generation: ACCEPTED (1 accepted, 0 rejected)" in captured.err
 
 
-def test_cli_with_ai_hypotheses_abstained_outcome_end_to_end(tmp_path, capsys, monkeypatch):
+def test_cli_with_ai_abstained_outcome_end_to_end(tmp_path, capsys, monkeypatch):
     from k8s_investigator.ai import client_factory
     from tests.fakes import FakeHypothesisModelClient
 
@@ -407,7 +430,7 @@ def test_cli_with_ai_hypotheses_abstained_outcome_end_to_end(tmp_path, capsys, m
     exit_code = main(
         [
             "pod", "demo-pod", "--namespace", "demo-ns",
-            "--from-bundle", str(bundle_path), "--output", "json", "--with-ai-hypotheses",
+            "--from-bundle", str(bundle_path), "--output", "json", "--with-ai",
         ]
     )
 
@@ -421,7 +444,7 @@ def test_cli_with_ai_hypotheses_abstained_outcome_end_to_end(tmp_path, capsys, m
     assert "AI hypothesis generation: ABSTAINED (0 accepted, 0 rejected)" in captured.err
 
 
-def test_cli_with_ai_hypotheses_all_rejected_outcome_end_to_end(tmp_path, capsys, monkeypatch):
+def test_cli_with_ai_all_rejected_outcome_end_to_end(tmp_path, capsys, monkeypatch):
     from k8s_investigator.ai import client_factory
     from tests.fakes import FakeHypothesisModelClient
 
@@ -450,7 +473,7 @@ def test_cli_with_ai_hypotheses_all_rejected_outcome_end_to_end(tmp_path, capsys
     exit_code = main(
         [
             "pod", "demo-pod", "--namespace", "demo-ns",
-            "--from-bundle", str(bundle_path), "--output", "json", "--with-ai-hypotheses",
+            "--from-bundle", str(bundle_path), "--output", "json", "--with-ai",
         ]
     )
 
@@ -464,7 +487,7 @@ def test_cli_with_ai_hypotheses_all_rejected_outcome_end_to_end(tmp_path, capsys
     assert "AI hypothesis generation: ALL_REJECTED (0 accepted, 1 rejected)" in captured.err
 
 
-def test_cli_with_ai_hypotheses_rejected_candidate_credential_never_appears_in_output_or_stderr(
+def test_cli_with_ai_rejected_candidate_credential_never_appears_in_output_or_stderr(
     tmp_path, capsys, monkeypatch
 ):
     """A rejected candidate's own statement, even if it happens to contain a synthetic
@@ -499,7 +522,7 @@ def test_cli_with_ai_hypotheses_rejected_candidate_credential_never_appears_in_o
     exit_code = main(
         [
             "pod", "demo-pod", "--namespace", "demo-ns",
-            "--from-bundle", str(bundle_path), "--output", "both", "--with-ai-hypotheses",
+            "--from-bundle", str(bundle_path), "--output", "both", "--with-ai",
         ]
     )
 

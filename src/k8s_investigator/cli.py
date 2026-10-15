@@ -44,8 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
             "R1-R11), and produces a report whose findings are always traceable to specific, "
             "validated evidence -- no AI model is required. Run `%(prog)s pod --help` for the "
             "full set of options, including offline replay (--from-bundle), safe-by-default "
-            "evidence export (--save-bundle), and optional AI hypotheses "
-            "(--with-ai-hypotheses)."
+            "evidence export (--save-bundle), and optional AI hypotheses (--with-ai)."
         ),
     )
     subparsers = parser.add_subparsers(dest="resource", required=True)
@@ -86,7 +85,11 @@ def build_parser() -> argparse.ArgumentParser:
     pod.add_argument("--output", choices=["json", "text", "both"], default="text")
     pod.add_argument("--out", metavar="PATH", help="write output to this file instead of stdout")
     pod.add_argument(
-        "--with-ai-hypotheses",
+        "--with-ai",
+        "--with-ai-hypotheses",  # deprecated spelling, kept as a trivial compatibility alias --
+        # both set the same `with_ai` flag below; argparse handles the alias natively, with no
+        # extra logic. Prefer --with-ai in new scripts and documentation.
+        dest="with_ai",
         action="store_true",
         help=(
             "also attempt AI hypothesis generation over the already-validated evidence and "
@@ -94,7 +97,8 @@ def build_parser() -> argparse.ArgumentParser:
             "(AI_HYPOTHESIS_PROVIDER and that provider's own variables) -- see "
             "k8s_investigator.ai.client_factory. A failure here never blocks or alters the "
             "deterministic findings; it is reported honestly as ai_hypothesis_status=FAILED, "
-            "never as a silent zero-hypothesis success."
+            "never as a silent zero-hypothesis success. `--with-ai-hypotheses` is accepted as "
+            "a deprecated alias for the same flag."
         ),
     )
 
@@ -144,7 +148,7 @@ def main(argv: list[str] | None = None) -> int:
     ai_error: str | None = None
     ai_outcome: AIHypothesisOutcome | None = None
     ai_rejection_reasons: list[AIHypothesisRejectionReason] = []
-    if args.with_ai_hypotheses:
+    if args.with_ai:
         findings, ai_status, ai_error, ai_outcome, ai_rejection_reasons = _run_ai_hypotheses(
             bundle, findings, contradictions
         )

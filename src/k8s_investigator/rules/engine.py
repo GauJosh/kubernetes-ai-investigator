@@ -80,6 +80,7 @@ def evaluate_bundle(bundle: EvidenceBundle) -> tuple[list[Finding], list[Contrad
 
     findings.extend(evaluate_scheduling(pod, relationships))
     findings.extend(evaluate_health(pod, relationships.event_items))
+    findings.extend(_unrecognized_failure_fact(pod, container_statuses, findings))
 
     contradictions = detect_contradictions(pod, container_statuses, relationships.event_items)
     scheduling_event = find_scheduling_event(relationships.event_items)
@@ -174,6 +175,54 @@ def _container_state_facts(pod: EvidenceItem, container_statuses: list[dict]) ->
             )
         )
     return facts
+
+
+def _unrecognized_failure_fact(
+    pod: EvidenceItem, container_statuses: list[dict], findings: list[Finding]
+) -> list[Finding]:
+    """A bank-wide, cross-cutting honesty check -- not a numbered rule, and never a
+    DETERMINISTIC_FINDING itself. R1-R11 each already abstain honestly *within their own
+    category* (e.g. ``rule:image_pull_unrecognized``, ``rule:R4_insufficient_evidence``,
+    ``rule:scheduling_unrecognized``) when their own evidence doesn't match a known pattern.
+    But a container whose problem falls entirely outside every category this rule bank
+    checks for (not an image-pull state, not a crash loop, not scheduling-blocked, no
+    'Unhealthy' event) previously produced *no* statement at all beyond the generic
+    container-state fact -- silently indistinguishable from "nothing is wrong".
+
+    This closes that gap: if nothing anywhere in ``findings`` reached a DETERMINISTIC_FINDING,
+    and at least one container is not simply running-and-ready, say so explicitly, once, for
+    the whole investigation. Deliberately never claims the absence of a cause -- only the
+    absence of a matching rule -- and deliberately never produced for a container that *is*
+    healthy (running and ready), so it cannot misfire on an actually-fine Pod.
+    """
+    if any(f.kind == FindingKind.DETERMINISTIC_FINDING for f in findings):
+        return []
+
+    unhealthy = [
+        (idx, cs)
+        for idx, cs in enumerate(container_statuses)
+        if not ((cs.get("state") or {}).get("running") and cs.get("ready"))
+    ]
+    if not unhealthy:
+        return []
+
+    names = ", ".join(cs.get("name", f"container-{idx}") for idx, cs in unhealthy)
+    locators = [field_locator(pod, "status", "containerStatuses", idx, "ready") for idx, _ in unhealthy]
+    return [
+        make_finding(
+            kind=FindingKind.OBSERVED_FACT,
+            statement=(
+                f"No deterministic rule in this project's rule bank (R1-R11) established a "
+                f"root cause for container(s) {names}, which are not in a healthy "
+                "running-and-ready state. This does not mean no cause exists -- it means the "
+                "collected evidence did not match any of this project's known failure "
+                "patterns. Review the observed facts and evidence gaps above for what was "
+                "actually checked."
+            ),
+            produced_by="engine:no_rule_matched",
+            locators=locators,
+        )
+    ]
 
 
 # --- R1 / R2 / R3: image pull failures -----------------------------------------------------

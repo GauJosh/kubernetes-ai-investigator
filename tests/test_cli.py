@@ -85,6 +85,26 @@ def test_no_redundant_command_nesting_in_the_parser():
     assert set(subparsers_actions[0].choices) == {"pod"}
 
 
+def test_with_ai_and_deprecated_alias_parse_to_the_same_destination():
+    """`--with-ai` (preferred) and `--with-ai-hypotheses` (deprecated alias) must set the exact
+    same attribute -- proven directly against the parser, not just by behavior, so this can
+    never silently drift into two different flags that happen to look similar."""
+    from k8s_investigator.cli import build_parser
+
+    parser = build_parser()
+    subparsers_action = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
+    pod_subparser = subparsers_action.choices["pod"]
+    with_ai_action = next(a for a in pod_subparser._actions if "--with-ai" in a.option_strings)
+
+    assert with_ai_action.dest == "with_ai"
+    assert set(with_ai_action.option_strings) == {"--with-ai", "--with-ai-hypotheses"}
+
+    args_new = parser.parse_args(["pod", "demo-pod", "--with-ai"])
+    args_old = parser.parse_args(["pod", "demo-pod", "--with-ai-hypotheses"])
+    assert args_new.with_ai is True
+    assert args_old.with_ai is True
+
+
 def test_cli_from_bundle_json_output(tmp_path, capsys):
     bundle_path = _write_bundle(tmp_path, scenarios.r1_dns_failure())
     exit_code = main(

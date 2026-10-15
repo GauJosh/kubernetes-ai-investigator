@@ -91,6 +91,13 @@ def _derive_next_steps(
                 f"container ({fact.produced_by}) -- manual inspection is recommended; see the "
                 "corresponding observed fact for exactly what was and was not checked."
             )
+        elif fact.produced_by == "engine:no_rule_matched":
+            steps.append(
+                "No deterministic rule recognized this failure pattern -- review the observed "
+                "facts and evidence gaps above directly, and consider re-running with --with-ai "
+                "(requires AI_HYPOTHESIS_PROVIDER/OPENAI_API_KEY/AI_HYPOTHESIS_MODEL configured) "
+                "for a hypothesis grounded in this same evidence."
+            )
 
     for gap in evidence_gaps:
         kind = getattr(gap.source_ref, "kind", None)

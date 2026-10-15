@@ -32,9 +32,9 @@ def build_client_from_env() -> tuple[HypothesisModelClient, str]:
     provider = os.environ.get("AI_HYPOTHESIS_PROVIDER")
     if not provider:
         raise HypothesisClientConfigurationError(
-            "--with-ai-hypotheses was requested but AI_HYPOTHESIS_PROVIDER is not set. Set "
+            "--with-ai was requested but AI_HYPOTHESIS_PROVIDER is not set. Set "
             "AI_HYPOTHESIS_PROVIDER=openai (the only provider implemented so far) and its "
-            "required variables, or omit --with-ai-hypotheses for the deterministic-only path."
+            "required variables, or omit --with-ai for the deterministic-only path."
         )
     if provider == "openai":
         from .openai_client import build_openai_client_from_env

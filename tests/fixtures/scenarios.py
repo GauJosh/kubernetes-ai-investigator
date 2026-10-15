@@ -672,6 +672,27 @@ def r10_no_pending_pvc_found() -> FakeKubernetesClient:
     )
 
 
+def unfamiliar_failure_no_matching_rule() -> FakeKubernetesClient:
+    """A container waiting with a reason genuinely outside every category this rule bank
+    checks: not an image-pull state (``PULL_FAILURE_WAITING_REASONS``), not
+    ``CrashLoopBackOff`` and no prior restarts (so ``_crash_loop_anchor`` finds nothing), not
+    scheduling-blocked (the pod is already assigned/running, just failing to start one
+    container), and no 'Unhealthy' probe event. Nothing in R1-R11 recognizes this shape at
+    all -- the exact gap ``engine:no_rule_matched`` exists to report honestly, and a case
+    with real, citable evidence (a concrete, specific event) an AI hypothesis could
+    legitimately ground a MEDIUM/LOW-confidence guess in, without any deterministic finding
+    requiring or blessing it first."""
+    c = FakeKubernetesClient()
+    c.pod = make_pod(waiting_reason="CreateContainerConfigError", restart_count=0)
+    c.events = [
+        make_event(
+            "Error: configmap \"app-config\" not found",
+            reason="FailedMount",
+        )
+    ]
+    return _with_owner_chain(c)
+
+
 def report_quality_finding_gap_and_contradiction_together() -> FakeKubernetesClient:
     """Phase 0.16: composes the existing R6 capacity-contradiction case (a DETERMINISTIC_FINDING
     plus a recorded contradiction) with a genuine, independent collection-error evidence gap

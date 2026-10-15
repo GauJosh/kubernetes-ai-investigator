@@ -133,3 +133,26 @@ def test_plugin_preserves_existing_offline_cli_behavior_end_to_end():
     assert result.returncode == 0
     assert "DETERMINISTIC FINDINGS" in result.stdout
     assert "rule:R1_dns_failure" in result.stdout
+
+
+@pytest.mark.parametrize("ai_flag", ["--with-ai", "--with-ai-hypotheses"])
+def test_plugin_forwards_the_ai_flag_unchanged_under_either_spelling(ai_flag):
+    """Phase 0.17: the plugin does exactly one thing -- exec kai "$@" -- so it never needs to
+    know about a flag rename; both the new preferred spelling and the deprecated alias must
+    reach kai exactly as typed. No AI provider is configured here, so this only needs to prove
+    the flag was forwarded (an honest FAILED status), never that it succeeded."""
+    venv_scripts = str(_venv_script_dir())
+    env_path = venv_scripts + os.pathsep + os.environ.get("PATH", "")
+    env = dict(os.environ)
+    env["PATH"] = env_path
+    env.pop("AI_HYPOTHESIS_PROVIDER", None)
+
+    result = subprocess.run(
+        [_BASH, str(_PLUGIN_SCRIPT), "pod", "demo-pod", "-n", "demo-ns",
+         "--from-bundle", str(_COMMITTED_BUNDLE), "--output", "json", ai_flag],
+        capture_output=True, text=True, env=env,
+    )
+    out = json.loads(result.stdout)
+    assert result.returncode == 0
+    assert out["ai_hypothesis_status"] == "FAILED"  # proves the flag reached kai, not ignored
+    assert out["deterministic_findings"][0]["produced_by"] == "rule:R1_dns_failure"
