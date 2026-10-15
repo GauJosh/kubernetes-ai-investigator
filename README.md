@@ -211,6 +211,52 @@ problem. If a deterministic rule simply doesn't recognize your evidence, that is
 all: the report says so explicitly (an `OBSERVED_FACT` naming exactly what was and wasn't
 checked), rather than guessing at a cause or staying silent.
 
+## kubectl plugin integration (optional)
+
+`kai` works standalone and needs nothing in this section to be useful. If you'd rather reach
+for it the same way you reach for any other `kubectl` subcommand, `integrations/kubectl/kubectl-kai`
+makes that possible — a single, ~30-line shell script, not a plugin framework. kubectl discovers
+plugins natively: any executable file on your `PATH` named `kubectl-<name>` becomes runnable as
+`kubectl <name>`, with every argument forwarded verbatim — no registration, no manifest. This
+script does exactly one thing: it `exec`s the already-installed `kai` (falling back to
+`investigate`) with the exact same arguments, unchanged.
+
+**Requires:** a POSIX shell (`bash`) to *run the plugin form* — on Windows, use WSL or Git Bash
+for `kubectl kai ...`, or simply call `kai`/`investigate` directly, which needs no shell script
+at all and already works natively there. `kai` itself must already be installed (see
+Installation above); the plugin does nothing on its own.
+
+**Install:**
+
+```bash
+cp integrations/kubectl/kubectl-kai /usr/local/bin/kubectl-kai
+chmod +x /usr/local/bin/kubectl-kai
+kubectl plugin list   # should now list kubectl-kai
+```
+
+**End-to-end example** (identical to calling `kai` directly, just through `kubectl`):
+
+```bash
+kubectl kai pod rag-service -n devops-genai
+kubectl kai pod my-pod -n my-ns --from-bundle saved-bundle.json
+```
+
+This also composes naturally with an existing diagnostic shell pipeline — e.g. investigate
+every non-`Running` Pod in a namespace:
+
+```bash
+kubectl get pods -n my-ns --field-selector=status.phase!=Running -o name \
+  | sed 's#pod/##' \
+  | xargs -I{} kubectl kai pod {} -n my-ns
+```
+
+Everything this project guarantees elsewhere still holds through the plugin: read-only
+collection, AI only runs if you pass `--with-ai-hypotheses` yourself, `--save-bundle` is
+sanitized by default, and `--from-bundle` replays fully offline — the plugin changes none of
+that, it only changes how you spell the command. See `tests/test_kubectl_plugin.py` for the
+automated tests covering argument forwarding, namespace/Pod-name handling, the AI-not-invoked
+guarantee, and the error message when `kai` isn't installed.
+
 ## What this tool does not do (by design, this milestone)
 
 - No write, mutation, `exec`, `attach`, `port-forward`, or eviction capability exists anywhere in
@@ -291,7 +337,7 @@ pytest
 ```
 
 All tests run against synthetic `EvidenceBundle` fixtures and a fake Kubernetes client
-(`tests/fakes.py`) — none require a cluster, and none are skipped or marked pending. 336 tests
+(`tests/fakes.py`) — none require a cluster, and none are skipped or marked pending. 342 tests
 pass as of this entry (no live Kubernetes access, no paid model call in that count). See
 `docs/phase-0.9-milestone-1-notes.md` and `docs/phase-0.10-milestone-2-notes.md` for the actual
 test run output from each implementation phase.
@@ -325,6 +371,8 @@ src/k8s_investigator/
   cli.py           `kai pod <name> ...` (also installed as `investigate`, a trivial alias)
 tests/             synthetic fixtures + a fake Kubernetes client; no live cluster
 docs/              the full research, design, and decision record for this project
+integrations/
+  kubectl/kubectl-kai  optional kubectl plugin -- forwards to kai unchanged (see above)
 ```
 
 ## Documentation

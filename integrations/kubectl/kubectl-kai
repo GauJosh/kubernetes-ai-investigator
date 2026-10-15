@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# kubectl plugin: expose the Kubernetes AI Investigator (`kai`) as `kubectl kai ...`.
+#
+# This is not a plugin framework and does not add one -- kubectl discovers plugins natively:
+# any executable file on PATH named `kubectl-<name>` becomes runnable as `kubectl <name>`, with
+# every argument after the plugin name forwarded verbatim. This script does exactly one thing:
+# it execs the already-installed `kai` (or its `investigate` alias) with those same arguments,
+# completely unchanged. It adds no behavior, no flags, and no state of its own.
+#
+# Install:
+#   1. Install kai itself first (see the main README's Installation section) -- this plugin
+#      does nothing on its own; it only makes kubectl aware of an already-working `kai`.
+#   2. Put this file on PATH as `kubectl-kai` and make it executable:
+#        cp integrations/kubectl/kubectl-kai /usr/local/bin/kubectl-kai
+#        chmod +x /usr/local/bin/kubectl-kai
+#   3. Confirm kubectl sees it: `kubectl plugin list` should now include kubectl-kai.
+#
+# Usage -- identical to `kai` itself, just invoked through kubectl:
+#   kubectl kai pod <name> -n <namespace> [kai options...]
+#   kubectl kai pod rag-service -n devops-genai
+#   kubectl kai pod my-pod -n my-ns --from-bundle saved-bundle.json
+#
+# Requires a POSIX shell (bash). On Windows, use WSL or Git Bash to run this plugin, or just
+# call `kai`/`investigate` directly -- the CLI itself has no such requirement and works natively
+# on Windows without this wrapper at all.
+
+set -euo pipefail
+
+if command -v kai >/dev/null 2>&1; then
+  exec kai "$@"
+elif command -v investigate >/dev/null 2>&1; then
+  exec investigate "$@"
+else
+  echo "error: 'kai' is not installed or not on PATH -- install it first (pip install -e \".[dev]\" from the kubernetes-ai-investigator repo; see its README's Installation section), then re-run 'kubectl kai ...'." >&2
+  exit 1
+fi
