@@ -5,7 +5,12 @@ from __future__ import annotations
 
 from .models.evidence import EvidenceStatus
 from .models.findings import Finding
-from .models.report import AIHypothesisOutcome, AIHypothesisRunStatus, InvestigationReport
+from .models.report import (
+    AIHypothesisOutcome,
+    AIHypothesisRunStatus,
+    CustomGuidanceMatch,
+    InvestigationReport,
+)
 
 
 def render_text(report: InvestigationReport) -> str:
@@ -72,6 +77,18 @@ def render_text(report: InvestigationReport) -> str:
             )
     lines.append("")
 
+    lines.append("CUSTOM KNOWLEDGE GUIDANCE")
+    lines.append("-" * 25)
+    if report.knowledge_pack_source is None:
+        lines.append("  (not supplied -- use --knowledge PATH to enable)")
+    elif not report.custom_guidance:
+        lines.append(f"  (none -- no custom rule in {report.knowledge_pack_source!r} matched this evidence)")
+    else:
+        lines.append(f"  (source: {report.knowledge_pack_source})")
+        for match in report.custom_guidance:
+            lines.extend(_render_custom_guidance(match))
+    lines.append("")
+
     lines.append("EVIDENCE GAPS")
     lines.append("-" * 13)
     if not report.evidence_gaps:
@@ -108,4 +125,19 @@ def _render_finding(finding: Finding) -> list[str]:
         lines.append(f"      evidence: {locator.evidence_id[:12]}... -> {locator.quoted_text!r}")
     if finding.limitation:
         lines.append(f"      limitation: {finding.limitation}")
+    return lines
+
+
+def _render_custom_guidance(match: CustomGuidanceMatch) -> list[str]:
+    """Renders the matched rule id/description (via the real, evidence-validated Finding,
+    exactly like any other finding) plus the rest of the knowledge pack's own guidance block
+    -- never merged into or confused with a built-in rule's output."""
+    lines = _render_finding(match.finding)
+    lines.append(f"      summary: {match.summary}")
+    if match.next_checks:
+        lines.append("      next checks:")
+        for check in match.next_checks:
+            lines.append(f"        - {check}")
+    if match.runbook:
+        lines.append(f"      runbook: {match.runbook}")
     return lines

@@ -693,6 +693,25 @@ def unfamiliar_failure_no_matching_rule() -> FakeKubernetesClient:
     return _with_owner_chain(c)
 
 
+def custom_knowledge_postgres_connection_refused() -> FakeKubernetesClient:
+    """Phase 0.18: a container log containing a free-text "connection refused" failure that no
+    built-in rule (R1-R11) recognizes -- the canonical scenario this repository's example
+    knowledge pack (``.kai/knowledge.yaml``, rule ``internal-postgres-connectivity``) is
+    designed to match via ``evidence_contains``. Crash-looping so the container is not simply
+    healthy, with log content outside every pattern R4 checks for, so this also produces no
+    DETERMINISTIC_FINDING and no AI involvement is needed to demonstrate the match."""
+    c = FakeKubernetesClient()
+    c.pod = make_pod(crash_loop=True, last_terminated_reason="Error", restart_count=2)
+    c.events = []
+    c.logs["server"] = (
+        "connecting to database...\n"
+        "psycopg.OperationalError: connection failed: connection to server at "
+        '"postgres.demo-ns.svc.cluster.local", port 5432 failed: Connection refused\n'
+        "Is the server running on that host and accepting TCP/IP connections?\n"
+    )
+    return _with_owner_chain(c)
+
+
 def report_quality_finding_gap_and_contradiction_together() -> FakeKubernetesClient:
     """Phase 0.16: composes the existing R6 capacity-contradiction case (a DETERMINISTIC_FINDING
     plus a recorded contradiction) with a genuine, independent collection-error evidence gap

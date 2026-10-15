@@ -12,6 +12,7 @@ from .models.report import (
     AIHypothesisOutcome,
     AIHypothesisRejectionReason,
     AIHypothesisRunStatus,
+    CustomGuidanceMatch,
     InvestigationReport,
 )
 from .timeline import tag
@@ -27,19 +28,26 @@ def build_report(
     ai_hypothesis_error: str | None = None,
     ai_hypothesis_outcome: AIHypothesisOutcome | None = None,
     ai_hypothesis_rejection_reasons: list[AIHypothesisRejectionReason] | None = None,
+    custom_guidance: list[CustomGuidanceMatch] | None = None,
+    knowledge_pack_source: str | None = None,
 ) -> InvestigationReport:
     """Validates every finding's evidence locators before building the report. Raises the
     underlying typed error (see errors.py) if any finding does not survive validation --
-    an invalid finding is never shown to a user as if it were a result.
+    an invalid finding is never shown to a user as if it were a result. This now includes
+    every ``custom_guidance`` match's own ``finding`` -- a knowledge-pack rule's citation is
+    held to the exact same evidence-reference standard as a built-in rule's, never a weaker,
+    parallel check (Phase 0.18).
 
     ``ai_hypothesis_status``/``ai_hypothesis_error``/``ai_hypothesis_outcome``/
-    ``ai_hypothesis_rejection_reasons`` are all supplied by the caller (``cli.py``), which is the
-    only place that knows whether AI hypothesis generation was even attempted and how it went --
-    this function only assembles what it is given. Every existing call site that omits all four
-    keyword arguments gets exactly Milestone 1-2/Phase 0.11 behavior (NOT_ATTEMPTED, no error, no
-    outcome), unchanged.
+    ``ai_hypothesis_rejection_reasons``/``custom_guidance``/``knowledge_pack_source`` are all
+    supplied by the caller (``cli.py``), which is the only place that knows whether AI
+    hypothesis generation or a knowledge pack were even requested -- this function only
+    assembles what it is given. Every existing call site that omits all six keyword arguments
+    gets exactly Milestone 1-2/Phase 0.11 behavior (NOT_ATTEMPTED, no error, no outcome, no
+    custom guidance), unchanged.
     """
-    validate_findings(findings, bundle)
+    custom_guidance = custom_guidance or []
+    validate_findings(findings + [match.finding for match in custom_guidance], bundle)
 
     observed = [f for f in findings if f.kind == FindingKind.OBSERVED_FACT]
     deterministic = [f for f in findings if f.kind == FindingKind.DETERMINISTIC_FINDING]
@@ -62,6 +70,8 @@ def build_report(
         evidence_gaps=evidence_gaps,
         contradictions=contradictions,
         next_steps=_derive_next_steps(deterministic, observed, evidence_gaps, contradictions),
+        custom_guidance=custom_guidance,
+        knowledge_pack_source=knowledge_pack_source,
     )
 
 

@@ -17,6 +17,12 @@ class FindingKind(str, Enum):
     DETERMINISTIC_FINDING = "DETERMINISTIC_FINDING"
     AI_HYPOTHESIS = "AI_HYPOTHESIS"  # not produced in Milestone 1 -- the kind exists so the
     # schema does not change when the (unimplemented) AI-hypothesis layer arrives.
+    CUSTOM_GUIDANCE = "CUSTOM_GUIDANCE"  # Phase 0.18: a team-defined knowledge-pack rule
+    # matched real evidence. Evidence-grounded like a DETERMINISTIC_FINDING (same
+    # evidence_locators requirement below), but never a built-in, code-reviewed rule's
+    # conclusion -- rendered in its own report section, never merged into or confused with
+    # DETERMINISTIC FINDINGS, and never carries a `confidence` label (that stays AI_HYPOTHESIS
+    # -only, per the existing rule just below).
 
 
 class Confidence(str, Enum):
@@ -48,10 +54,14 @@ class Finding(BaseModel):
 
     @model_validator(mode="after")
     def _enforce_closed_contract(self) -> "Finding":
-        if self.kind == FindingKind.DETERMINISTIC_FINDING and not self.evidence_locators:
+        if (
+            self.kind in (FindingKind.DETERMINISTIC_FINDING, FindingKind.CUSTOM_GUIDANCE)
+            and not self.evidence_locators
+        ):
             raise ValueError(
-                f"Finding {self.id!r}: a DETERMINISTIC_FINDING with no evidence_locators is a "
-                "bug, not a result (docs/phase-0.8-mvp-blueprint.md §D)."
+                f"Finding {self.id!r}: a {self.kind.value} with no evidence_locators is a "
+                "bug, not a result (docs/phase-0.8-mvp-blueprint.md §D) -- a knowledge-pack "
+                "rule must only match when it can cite the real evidence that triggered it."
             )
         if self.confidence is not None and self.kind != FindingKind.AI_HYPOTHESIS:
             raise ValueError(

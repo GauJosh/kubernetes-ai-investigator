@@ -27,9 +27,16 @@ from .collector.client import DEFAULT_LOG_SINCE_SECONDS, DEFAULT_LOG_TAIL_LINES
 from .collector.collect import collect_pod_evidence
 from .errors import BundleExportSanitizationError, BundleExportWriteError, InvestigatorError
 from .export_sanitization import sanitize_bundle_for_export
+from .knowledge.loader import KnowledgePackError, load_knowledge_pack
+from .knowledge.matcher import evaluate_knowledge_pack
 from .models.evidence import EvidenceBundle
 from .models.refs import ObjectRef
-from .models.report import AIHypothesisOutcome, AIHypothesisRejectionReason, AIHypothesisRunStatus
+from .models.report import (
+    AIHypothesisOutcome,
+    AIHypothesisRejectionReason,
+    AIHypothesisRunStatus,
+    CustomGuidanceMatch,
+)
 from .rendering import render_text
 from .report_builder import build_report
 from .rules.engine import evaluate_bundle
@@ -44,7 +51,8 @@ def build_parser() -> argparse.ArgumentParser:
             "R1-R11), and produces a report whose findings are always traceable to specific, "
             "validated evidence -- no AI model is required. Run `%(prog)s pod --help` for the "
             "full set of options, including offline replay (--from-bundle), safe-by-default "
-            "evidence export (--save-bundle), and optional AI hypotheses (--with-ai)."
+            "evidence export (--save-bundle), optional AI hypotheses (--with-ai), and optional "
+            "team-defined knowledge packs (--knowledge)."
         ),
     )
     subparsers = parser.add_subparsers(dest="resource", required=True)
@@ -101,6 +109,17 @@ def build_parser() -> argparse.ArgumentParser:
             "a deprecated alias for the same flag."
         ),
     )
+    pod.add_argument(
+        "--knowledge",
+        metavar="PATH",
+        help=(
+            "evaluate a team-defined knowledge pack (YAML; see k8s_investigator.knowledge) "
+            "against the already-collected evidence, in addition to the built-in R1-R11 rules. "
+            "Entirely offline and deterministic -- no AI, no network. A match is reported in "
+            "its own 'CUSTOM KNOWLEDGE GUIDANCE' section, never as a DETERMINISTIC_FINDING. "
+            "Not loaded from anywhere unless this flag names it explicitly."
+        ),
+    )
 
     return parser
 
@@ -144,6 +163,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"internal error: {exc}", file=sys.stderr)
         return 3
 
+    custom_guidance: list[CustomGuidanceMatch] = []
+    knowledge_pack_source: str | None = None
+    if args.knowledge:
+        try:
+            pack, _pack_dir = load_knowledge_pack(args.knowledge)
+            custom_guidance = evaluate_knowledge_pack(pack, bundle)
+            knowledge_pack_source = args.knowledge
+        except KnowledgePackError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 5
+
     ai_status = AIHypothesisRunStatus.NOT_ATTEMPTED
     ai_error: str | None = None
     ai_outcome: AIHypothesisOutcome | None = None
@@ -158,6 +188,7 @@ def main(argv: list[str] | None = None) -> int:
             bundle, findings, contradictions,
             ai_hypothesis_status=ai_status, ai_hypothesis_error=ai_error,
             ai_hypothesis_outcome=ai_outcome, ai_hypothesis_rejection_reasons=ai_rejection_reasons,
+            custom_guidance=custom_guidance, knowledge_pack_source=knowledge_pack_source,
         )
     except InvestigatorError as exc:
         print(f"internal error: {exc}", file=sys.stderr)

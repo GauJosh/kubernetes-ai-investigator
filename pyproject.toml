@@ -11,6 +11,8 @@ readme = "README.md"
 dependencies = [
     "pydantic>=2.6,<3",
     "kubernetes>=29,<32",
+    "pyyaml>=6,<7",  # custom knowledge-pack loading (Phase 0.18) -- core functionality,
+    # available with AI fully disabled, so this is a direct dependency, not an extra.
 ]
 
 [project.optional-dependencies]

@@ -17,8 +17,10 @@ match any of R1-R11, the report says so explicitly rather than staying silent or
 Pod is healthy (`engine:no_rule_matched` — see Usage below). AI hypotheses (`--with-ai`) are
 entirely optional, off by default, and never required to get a useful report — and, when
 enabled, can propose a hypothesis for exactly that unrecognized-pattern case too, without
-needing a matching deterministic rule to exist first. See `docs/phase-0.8-mvp-blueprint.md`
-for the approved architecture and
+needing a matching deterministic rule to exist first. Teams can also layer their own
+deterministic guidance on top via an optional, versioned YAML knowledge pack (`--knowledge
+PATH`) — no AI, no Python code, no API key required (see Custom knowledge packs below). See
+`docs/phase-0.8-mvp-blueprint.md` for the approved architecture and
 `docs/phase-0.9-milestone-1-notes.md`/`docs/phase-0.10-milestone-2-notes.md`/
 `docs/phase-0.13-probe-failure-rule-design.md` for what each milestone built.
 
@@ -249,7 +251,8 @@ automatically.
 Every error the CLI can report is a single, specific line starting `error:` (a problem with
 *what you asked for* — exit code `2` for a usage conflict like combining `--save-bundle` with
 `--from-bundle`, `1` for a collection failure like a missing bundle file or an unreachable
-cluster, `3` for an internal validation failure, `4` for a bundle-export failure) or `warning:`
+cluster, `3` for an internal validation failure, `4` for a bundle-export failure, `5` for an
+invalid or unsafe `--knowledge` pack (see Custom knowledge packs below)) or `warning:`
 (something degraded gracefully and the rest of the report still shipped, e.g. AI hypothesis
 generation failing). None of these messages ever include a credential, a raw evidence payload,
 or (for an AI-path failure) a rejected candidate's own text — only enough detail to fix the
@@ -292,6 +295,130 @@ before: an AI hypothesis can propose a plausible explanation for this same evide
 needing a matching deterministic rule to exist first (it still goes through the same citation
 and confidence-grounding validation as every other hypothesis — see Enabling AI hypotheses
 above).
+
+## Custom knowledge packs (optional)
+
+**What this is.** A knowledge pack lets your team teach `kai` about *your own* operational
+patterns — environment-specific symptoms, the next checks your team actually runs, and links
+to your own runbooks — without writing or modifying any Python code. It is plain YAML plus
+plain Markdown, loaded explicitly from a path you give it.
+
+**What this is not.** It is not a general-purpose rules engine, a query language, or a plugin
+framework. It cannot execute commands, run code, or read Markdown "semantically" — a runbook
+is just a file path `kai` displays, never parsed or interpreted. A match is **not** a confirmed
+diagnosis: it is reported in its own `CUSTOM KNOWLEDGE GUIDANCE` section, separate from (and
+never contributing to) the built-in deterministic findings (R1-R11) or AI hypotheses. It
+requires no AI model, no API key, and no external service — it runs entirely offline,
+deterministically, from already-collected evidence.
+
+### Schema (version 1)
+
+```yaml
+version: 1              # required; must currently be exactly 1
+
+rules:
+  - id: internal-postgres-connectivity   # unique within the pack; letters/digits/-/_ only
+    description: Internal PostgreSQL connection troubleshooting   # shown as the match's statement
+
+    match:               # at least one of the three operators below is required
+      evidence_contains:   # OR within this list: matches if ANY substring is found
+        - "connection refused"
+        - "could not connect to server"
+      # event_reason: FailedMount                  # exact match on a collected Event's reason
+      # container_waiting_reason: CreateContainerConfigError  # exact match on a container's
+      #                                                         waiting-state reason
+
+    guidance:
+      summary: >
+        The application reported a refused database connection. The root cause has not yet
+        been established.
+      next_checks:
+        - Check whether the database endpoint is reachable.
+        - Verify the configured service name and port.
+        - Review the database workload and network policy.
+      runbook: runbooks/database-connectivity.md   # optional; relative to this YAML file only
+```
+
+Multiple operators in one rule's `match` block are **AND**-ed together (every declared
+operator must find something). Within `evidence_contains`, multiple substrings are **OR**-ed
+(any one is enough). This is the complete, closed set of supported operators — there is no
+general expression syntax, and an unrecognized key (a typo, or anything else) is a hard
+validation error, never silently ignored.
+
+| Operator | Matches against |
+|---|---|
+| `evidence_contains` (list of strings) | Case-insensitive substring search over the two existing free-text evidence sources: container log text and any collected Event's own `message` field. Never searches structured fields (UIDs, resource versions, etc.). |
+| `event_reason` (string) | Exact match against any collected Event's `reason` (e.g. `FailedMount`, `BackOff`). |
+| `container_waiting_reason` (string) | Exact match against any container's `status.containerStatuses[].state.waiting.reason` (e.g. `CreateContainerConfigError`). |
+
+Documented limits (a knowledge pack is untrusted input, bounded like every other evidence
+source in this project): a pack file is at most 1,000,000 bytes; at most 100 rules per pack; at
+most 20 `evidence_contains` entries and 20 `next_checks` per rule; every string field (summary,
+description, each check, each substring) is at most 2,000 characters.
+
+### Using it
+
+```bash
+# Live collection
+kai pod my-pod -n my-ns --knowledge .kai/knowledge.yaml
+
+# Offline replay — identical custom guidance, no cluster access, no AI
+kai pod my-pod -n my-ns --from-bundle saved-bundle.json --knowledge .kai/knowledge.yaml
+```
+
+`--knowledge` is never loaded implicitly — if you don't pass it, nothing changes from this
+project's existing behavior (the report's `CUSTOM KNOWLEDGE GUIDANCE` section just says it
+wasn't supplied). The same pack and the same evidence always produce the same result; nothing
+about matching depends on timing, randomness, or AI.
+
+A small, sanitized example pack ships in this repository at `.kai/knowledge.yaml` (with a
+runbook at `.kai/runbooks/database-connectivity.md`) so you can try the feature immediately:
+
+```bash
+# Build a synthetic bundle whose logs contain "Connection refused", then:
+kai pod demo-pod -n demo-ns --from-bundle synthetic-bundle.json --knowledge .kai/knowledge.yaml
+```
+
+renders a new report section:
+
+```
+CUSTOM KNOWLEDGE GUIDANCE
+-------------------------
+  (source: .kai/knowledge.yaml)
+  [knowledge:internal-postgres-connectivity] Internal PostgreSQL connection troubleshooting
+      evidence: <id>... -> 'psycopg.OperationalError: ... Connection refused'
+      summary: The application reported a refused database connection. The root cause has
+      not yet been established...
+      next checks:
+        - Check whether the database Service/Endpoint is actually reachable from this namespace.
+        - Verify the configured database host, port, and connection string are correct.
+        - Review the database workload's own status and any NetworkPolicy affecting this namespace.
+      runbook: runbooks/database-connectivity.md
+```
+
+When no rule matches, the section says so in one line (`(none -- no custom rule ... matched
+this evidence)`) rather than staying silent or implying the investigation itself failed.
+
+### Troubleshooting invalid configuration
+
+An invalid or unsafe pack always fails with a specific, actionable `error:` line and exit code
+`5` — never a silent partial result. Common causes:
+
+- an unsupported `version` (only `1` is currently accepted),
+- an unrecognized key under `match` (a typo, or an operator this version doesn't support),
+- a `match` block with none of the three operators set,
+- a duplicate rule `id` within the same pack,
+- a `runbook` path that is absolute, escapes the knowledge-pack's own directory (via `../`
+  traversal or a symlink), or does not exist on disk — relative paths are always resolved
+  against the directory containing the YAML file itself, never the current working directory.
+
+### Runbooks
+
+A `runbook` path, if present, must point to a file inside the same directory tree as the
+knowledge pack's own YAML file. `kai` resolves and validates that the file exists when the pack
+is loaded, and prints its path (unchanged) in the `CUSTOM KNOWLEDGE GUIDANCE` section — it is
+never read aloud, summarized, or interpreted by `kai` itself; opening and reading it is up to
+you.
 
 ## kubectl plugin integration (optional)
 
@@ -433,6 +560,9 @@ guarantee, and the error message when `kai` isn't installed.
   `docs/phase-0.12-citation-reference-increment-notes.md` for the full record.
 - No database, message broker, or web service — this is a CLI that reads evidence and writes
   files.
+- No Python plugin framework. Teams extend `kai` with YAML rules and Markdown runbooks only
+  (see Custom knowledge packs above) — never by writing or loading Python code, and never with
+  a general-purpose expression or query language.
 
 ## Limitations, stated plainly
 
@@ -476,8 +606,12 @@ pytest
 ```
 
 All tests run against synthetic `EvidenceBundle` fixtures and a fake Kubernetes client
-(`tests/fakes.py`) — none require a cluster, and none are skipped or marked pending. 354 tests
-pass as of this entry (no live Kubernetes access, no paid model call in that count). See
+(`tests/fakes.py`) — none require a cluster, and none are skipped or marked pending except one
+(the optional `openai` package not being installed in a `[dev]`-only environment) and one
+(symlink creation requiring a privilege this environment may not grant — knowledge-pack
+symlink-escape rejection is still covered; the one skip only means that specific OS-level
+symlink precondition couldn't be exercised here). 378 tests pass as of this entry (no live
+Kubernetes access, no paid model call in that count). See
 `docs/phase-0.9-milestone-1-notes.md` and `docs/phase-0.10-milestone-2-notes.md` for the actual
 test run output from each implementation phase.
 
@@ -507,11 +641,18 @@ src/k8s_investigator/
   collector/       the narrow Kubernetes client and orchestration (read-only, bounded)
   ai/              optional AI-hypothesis layer (off by default) -- model input projection,
                    candidate parsing/validation, redaction, the OpenAI adapter
+  knowledge/       optional custom knowledge-pack layer (off by default, --knowledge PATH) --
+                   schema (models.py), YAML loading + path-safety (loader.py), deterministic
+                   matching against evidence (matcher.py); never touches ai/ or rules/
   cli.py           `kai pod <name> ...` (also installed as `investigate`, a trivial alias)
 tests/             synthetic fixtures + a fake Kubernetes client; no live cluster
 docs/              the full research, design, and decision record for this project
 integrations/
   kubectl/kubectl-kai  optional kubectl plugin -- forwards to kai unchanged (see above)
+.kai/
+  knowledge.yaml           a small, sanitized example knowledge pack (see Custom knowledge
+                            packs above) -- try it immediately against a synthetic bundle
+  runbooks/database-connectivity.md  the example pack's one referenced runbook
 ```
 
 ## Documentation

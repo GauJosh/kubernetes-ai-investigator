@@ -1,0 +1,41 @@
+version: 1
+
+rules:
+  - id: internal-postgres-connectivity
+    description: Internal PostgreSQL connection troubleshooting
+
+    match:
+      evidence_contains:
+        - "connection refused"
+        - "could not connect to server"
+
+    guidance:
+      summary: >
+        The application reported a refused database connection. The root cause has not yet
+        been established by any built-in rule in this project's bank (R1-R11) -- this is
+        team-defined guidance, not a confirmed diagnosis.
+
+      next_checks:
+        - Check whether the database Service/Endpoint is actually reachable from this namespace.
+        - Verify the configured database host, port, and connection string are correct.
+        - Review the database workload's own status and any NetworkPolicy affecting this namespace.
+
+      runbook: runbooks/database-connectivity.md
+
+  - id: missing-configmap-or-secret-reference
+    description: Container cannot start due to a missing ConfigMap or Secret reference
+
+    match:
+      container_waiting_reason: CreateContainerConfigError
+
+    guidance:
+      summary: >
+        The container is stuck waiting because Kubernetes could not resolve a ConfigMap or
+        Secret referenced in its env or volumes. This is a common operational cause for this
+        waiting reason on our team's workloads, not a confirmed diagnosis for this specific
+        Pod.
+
+      next_checks:
+        - Confirm the referenced ConfigMap/Secret actually exists in this namespace.
+        - Check for a recent rename or deletion of that ConfigMap/Secret.
+        - Verify the Deployment's env/volume references match the current ConfigMap/Secret name.

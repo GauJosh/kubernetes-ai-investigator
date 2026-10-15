@@ -78,6 +78,28 @@ class AIHypothesisRejectionReason(str, Enum):
     # expected to rarely or never fire against the pipeline's current, closed set of checks
 
 
+class CustomGuidanceMatch(BaseModel):
+    """Phase 0.18: one team-defined knowledge-pack rule that matched real, collected evidence.
+
+    ``finding`` is a genuine, evidence-validated ``Finding`` (``kind=CUSTOM_GUIDANCE``) --
+    the matched rule's id (via ``produced_by``, e.g. ``"knowledge:internal-postgres-
+    connectivity"``) and description (via ``statement``), grounded in the exact evidence that
+    triggered it, and checked by the same ``validate_finding_references`` every other finding
+    in this project goes through. ``summary``/``next_checks``/``runbook`` carry the rest of the
+    matched rule's own ``guidance`` block verbatim -- team-authored prose and a declared file
+    path, never evidence citations, never validated against the bundle, and never executed or
+    interpreted as anything other than text to display.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    finding: Finding
+    summary: str
+    next_checks: list[str] = Field(default_factory=list)
+    runbook: str | None = None  # the path exactly as declared in the pack, already resolved
+    # and safety-checked by knowledge.loader before this object is ever constructed
+
+
 class InvestigationReport(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -98,6 +120,13 @@ class InvestigationReport(BaseModel):
     evidence_gaps: list[EvidenceItem] = Field(default_factory=list)  # status != PRESENT
     contradictions: list[ContradictionEdge] = Field(default_factory=list)
     next_steps: list[str] = Field(default_factory=list)  # human-readable, never auto-executable
+    # Phase 0.18 additions -- additive, same backward-compatibility story as the Phase 0.16
+    # fields above: absent from any report serialized before this feature existed, which
+    # still parses unchanged (missing key -> [] / None, exactly as if set that way here).
+    custom_guidance: list[CustomGuidanceMatch] = Field(default_factory=list)
+    knowledge_pack_source: str | None = None  # the --knowledge path actually used, or None if
+    # no knowledge pack was supplied for this investigation -- always visible in the report,
+    # never inferred or guessed from its absence
 
     @model_validator(mode="after")
     def _enforce_status_error_pairing(self) -> "InvestigationReport":
@@ -162,4 +191,20 @@ class InvestigationReport(BaseModel):
                     f"ai_hypothesis_rejection_reasons "
                     f"({'non-empty' if rejected else 'empty'}) are inconsistent with it."
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _enforce_custom_guidance_requires_a_source(self) -> "InvestigationReport":
+        """Phase 0.18: non-empty ``custom_guidance`` must always record which knowledge pack
+        produced it -- never attributed to "no pack" by omission. The reverse is explicitly
+        allowed: a pack can be supplied and genuinely match nothing (``knowledge_pack_source``
+        set, ``custom_guidance`` empty) -- that is the honest "checked, nothing matched"
+        result, not an error.
+        """
+        if self.custom_guidance and self.knowledge_pack_source is None:
+            raise ValueError(
+                "InvestigationReport: custom_guidance is non-empty but knowledge_pack_source "
+                "is not set -- custom guidance must always record which knowledge pack "
+                "produced it."
+            )
         return self
