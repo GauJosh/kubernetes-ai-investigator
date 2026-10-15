@@ -670,3 +670,18 @@ def r10_no_pending_pvc_found() -> FakeKubernetesClient:
         pvc_claim_names=["demo-pvc"],
         pvcs=[make_pvc(name="demo-pvc", phase="Bound", storage_class_name="standard")],
     )
+
+
+def report_quality_finding_gap_and_contradiction_together() -> FakeKubernetesClient:
+    """Phase 0.16: composes the existing R6 capacity-contradiction case (a DETERMINISTIC_FINDING
+    plus a recorded contradiction) with a genuine, independent collection-error evidence gap
+    (the owning ReplicaSet is forbidden) -- three distinct signal types in one bundle, none of
+    which should affect whether the others are produced or how they are reported."""
+    c = FakeKubernetesClient()
+    c.events = [make_event("0/4 nodes are available: 3 Insufficient cpu.", reason="FailedScheduling")]
+    return _unscheduled(
+        c,
+        container_resource_requests={"cpu": "2"},
+        nodes=[make_node(name="worker-1", allocatable_cpu="8")],  # 8 >= 2 requested -- contradicts "insufficient"
+        rs_unavailable=True,  # independent evidence gap: ReplicaSet collection forbidden
+    )
