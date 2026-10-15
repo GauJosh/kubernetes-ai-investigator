@@ -55,6 +55,20 @@ def test_r5_abstains_when_node_collection_unavailable():
     assert "could not be collected" in matching[0].statement
 
 
+def test_r5_no_cordoned_node_found_when_node_evidence_contradicts_the_event():
+    """Phase 0.15: Node evidence WAS collected successfully (distinct from
+    R5_nodes_unavailable), but none of the known nodes actually show
+    spec.unschedulable=true -- distinct from R5_all_nodes_cordoned and R5_partial_cordon,
+    both of which require at least one cordoned node to exist."""
+    bundle = collect_and_build(scenarios.r5_no_cordoned_node_found())
+    findings, _ = evaluate_bundle(bundle)
+    assert _deterministic(findings) == []
+    assert not any(f.produced_by == "rule:R5_partial_cordon" for f in findings)
+    matching = [f for f in _observed(findings) if f.produced_by == "rule:R5_no_cordoned_node_found"]
+    assert len(matching) == 1
+    assert "none of the known nodes" in matching[0].statement
+
+
 # --- R6: Resource capacity mismatch -------------------------------------------------------------
 
 
@@ -106,6 +120,18 @@ def test_r7_taint_mismatch_quotes_exact_taint():
     det = [f for f in _deterministic(findings) if f.produced_by == "rule:R7_taint_toleration_mismatch"]
     assert len(det) == 1
     assert "critical=true:NoSchedule" in det[0].statement
+
+
+def test_r7_taint_not_identified_when_node_evidence_shows_no_taints():
+    """Phase 0.15: the scheduler reports an untolerated taint, but the only schedulable node's
+    own evidence shows zero taints at all -- the Node evidence does not corroborate the
+    scheduler's claim, so R7 must abstain rather than fabricate a matching taint."""
+    bundle = collect_and_build(scenarios.r7_taint_not_identified())
+    findings, _ = evaluate_bundle(bundle)
+    assert _deterministic(findings) == []
+    matching = [f for f in _observed(findings) if f.produced_by == "rule:R7_taint_not_identified"]
+    assert len(matching) == 1
+    assert "no schedulable node's taint could be matched" in matching[0].statement
 
 
 # --- R8: Node selector / affinity mismatch -------------------------------------------------------
@@ -245,6 +271,30 @@ def test_r10_no_matching_pv_is_a_distinct_outcome():
     assert not any(f.produced_by == "rule:R10_pv_bound_elsewhere" for f in det)
 
 
+def test_r10_pvc_unavailable_when_pvc_collection_fails():
+    """Phase 0.15: the scheduler reports an unbound PVC, but the Pod's referenced PVC itself
+    could not be collected (RBAC denial) -- distinct from R10_no_pending_pvc_found, which
+    requires the PVC evidence to have actually been collected."""
+    bundle = collect_and_build(scenarios.r10_pvc_unavailable())
+    findings, _ = evaluate_bundle(bundle)
+    assert _deterministic(findings) == []
+    matching = [f for f in _observed(findings) if f.produced_by == "rule:R10_pvc_unavailable"]
+    assert len(matching) == 1
+    assert "no PVC evidence was collected" in matching[0].statement
+
+
+def test_r10_no_pending_pvc_found_when_pvc_already_bound():
+    """Phase 0.15: the scheduler reports an unbound PVC, PVC evidence WAS collected, but it
+    already shows phase=Bound (a stale scheduler event) -- R10 must not claim a Pending-PVC
+    outcome the PVC evidence itself contradicts."""
+    bundle = collect_and_build(scenarios.r10_no_pending_pvc_found())
+    findings, _ = evaluate_bundle(bundle)
+    assert _deterministic(findings) == []
+    matching = [f for f in _observed(findings) if f.produced_by == "rule:R10_no_pending_pvc_found"]
+    assert len(matching) == 1
+    assert "none of the Pod's collected PVC(s) show status Pending" in matching[0].statement
+
+
 # --- Missing evidence: no FailedScheduling event at all -------------------------------------------
 
 
@@ -255,6 +305,26 @@ def test_scheduling_abstains_entirely_when_no_event_found():
     matching = [f for f in _observed(findings) if f.produced_by == "rule:scheduling_no_event"]
     assert len(matching) == 1
     assert "cannot be determined" in matching[0].statement
+
+
+# --- Phase 0.14: the shared "no recognized pattern matched" fallback, previously untested ---------
+#
+# evaluate_scheduling's own dispatcher (rules/scheduling.py) falls through to this branch for
+# ANY FailedScheduling message that doesn't match one of R5-R10's six named patterns -- it is
+# the single safety net behind the entire Scheduling-fault category, and until this test, no
+# fixture or assertion exercised it at all: a regression here (e.g. the dispatcher silently
+# dropping the event instead of abstaining, or a future pattern addition accidentally widening
+# an existing substring to match too much) would have gone completely undetected.
+
+
+def test_scheduling_unrecognized_pattern_abstains_explicitly():
+    bundle = collect_and_build(scenarios.scheduling_unrecognized_pattern())
+    findings, _ = evaluate_bundle(bundle)
+    assert _deterministic(findings) == []
+    matching = [f for f in _observed(findings) if f.produced_by == "rule:scheduling_unrecognized"]
+    assert len(matching) == 1
+    assert "did not match any of this rule bank's recognized patterns" in matching[0].statement
+    assert "didn't have free ports" in matching[0].statement
 
 
 # --- Reproducibility, same contract as R1-R4 ------------------------------------------------------

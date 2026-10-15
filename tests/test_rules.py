@@ -44,6 +44,20 @@ def test_r2_tag_not_found_fires():
     assert "not found" in det[0].statement
 
 
+def test_r1_r2_r3_unrecognized_pull_failure_abstains_explicitly():
+    """Phase 0.15: an ImagePullBackOff event IS present, but matches none of R1/R2/R3's
+    recognized patterns -- the shared fallback behind the entire image-pull-failure family,
+    previously untested. Must abstain with an honest OBSERVED_FACT, never a guessed cause,
+    and never silently drop the event."""
+    bundle = collect_and_build(scenarios.r1_r2_r3_unrecognized_pull_failure())
+    findings, _ = evaluate_bundle(bundle)
+    assert _deterministic(findings) == []
+    matching = [f for f in _observed(findings) if f.produced_by == "rule:image_pull_unrecognized"]
+    assert len(matching) == 1
+    assert "none of the 1 event(s) collected matched a recognized failure pattern" in matching[0].statement
+    assert "toomanyrequests" not in matching[0].statement  # the statement describes, doesn't invent a cause
+
+
 def test_r3_no_secret_anywhere_high_confidence_wording():
     bundle = collect_and_build(scenarios.r3_no_secret_anywhere())
     findings, _ = evaluate_bundle(bundle)

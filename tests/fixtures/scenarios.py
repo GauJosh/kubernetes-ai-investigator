@@ -448,6 +448,21 @@ def scheduling_blocked_no_event_found() -> FakeKubernetesClient:
     return _unscheduled(c, nodes=[make_node(name="worker-1")])
 
 
+def scheduling_unrecognized_pattern() -> FakeKubernetesClient:
+    """Phase 0.14: a FailedScheduling event IS present, but its message matches none of
+    R5-R10's recognized patterns (here: a port-conflict message, a real, different scheduler
+    failure reason never covered by this rule bank) -- must abstain explicitly
+    (rule:scheduling_unrecognized), never silently drop the event or guess a cause."""
+    c = FakeKubernetesClient()
+    c.events = [
+        make_event(
+            "0/4 nodes are available: 4 node(s) didn't have free ports for the requested pod ports.",
+            reason="FailedScheduling",
+        )
+    ]
+    return _unscheduled(c, nodes=[make_node(name="worker-1")])
+
+
 def scheduling_blocked_nodes_unavailable() -> FakeKubernetesClient:
     """Partial-collection-failure case: the FailedScheduling event is present, but the Node
     list call itself fails (RBAC denial) -- R5 must abstain citing the gap, not claim a count."""
@@ -585,3 +600,73 @@ def r11_coexists_with_r4_log_pattern() -> FakeKubernetesClient:
     ]
     c.logs["server"] = "starting up\nFatal error: can't open the RDB file dump.rdb: Permission denied\n"
     return _with_owner_chain(c)
+
+
+# --- Phase 0.15: five previously-untested abstention/fallback branches -------------------------
+#
+# Each of these reaches a real, named outcome branch in rules/engine.py or rules/scheduling.py
+# that until now had zero fixture or test coverage -- see docs' coverage audit. Every fixture
+# below is built to reach ONE specific branch realistically, not merely to satisfy a rule id.
+
+
+def r1_r2_r3_unrecognized_pull_failure() -> FakeKubernetesClient:
+    """An ImagePullBackOff event IS present, but its message matches none of R1 (DNS)/R2
+    (not-found)/R3 (auth)'s recognized patterns -- a real, different registry failure (Docker
+    Hub's rate-limit message) that this rule bank does not claim to cover."""
+    c = FakeKubernetesClient()
+    c.pod = make_pod(waiting_reason="ErrImagePull")
+    c.events = [
+        make_event(
+            "toomanyrequests: You have reached your pull rate limit. "
+            "https://www.docker.com/increase-rate-limit"
+        )
+    ]
+    return _with_owner_chain(c)
+
+
+def r5_no_cordoned_node_found() -> FakeKubernetesClient:
+    """The scheduler reports nodes as unschedulable, Node evidence WAS collected successfully,
+    but none of the known nodes actually show spec.unschedulable=true -- distinct from both
+    R5_nodes_unavailable (collection failed) and R5_partial_cordon (some are cordoned)."""
+    c = FakeKubernetesClient()
+    c.events = [make_event("0/2 nodes are available: 2 node(s) were unschedulable.", reason="FailedScheduling")]
+    return _unscheduled(c, nodes=[make_node(name="worker-1"), make_node(name="worker-2")])
+
+
+def r7_taint_not_identified() -> FakeKubernetesClient:
+    """The scheduler reports an untolerated taint, but the only schedulable node's evidence
+    shows no taints at all -- the Node evidence does not corroborate the scheduler's claim."""
+    c = FakeKubernetesClient()
+    c.events = [
+        make_event("0/1 nodes are available: 1 node(s) had untolerated taint {critical: true}.", reason="FailedScheduling")
+    ]
+    return _unscheduled(c, nodes=[make_node(name="worker-1", taints=[])])
+
+
+def r10_pvc_unavailable() -> FakeKubernetesClient:
+    """The scheduler reports an unbound PVC, but the Pod's referenced PVC itself could not be
+    collected (RBAC denial) -- R10 must abstain citing the gap, not claim a specific PVC phase."""
+    c = FakeKubernetesClient()
+    c.events = [
+        make_event("0/4 nodes are available: pod has unbound immediate PersistentVolumeClaims.", reason="FailedScheduling")
+    ]
+    result = _unscheduled(c, pvc_claim_names=["demo-pvc"])
+    c.persistent_volume_claim_errors["demo-pvc"] = ApiForbiddenError(
+        "persistentvolumeclaims is forbidden for this user"
+    )
+    return result
+
+
+def r10_no_pending_pvc_found() -> FakeKubernetesClient:
+    """The scheduler reports an unbound PVC, PVC evidence WAS collected, but it already shows
+    phase=Bound (e.g. the scheduler's event is stale) -- none of the Pod's PVCs are Pending, so
+    R10 cannot confirm the reported cause against the PVC evidence it actually has."""
+    c = FakeKubernetesClient()
+    c.events = [
+        make_event("0/4 nodes are available: pod has unbound immediate PersistentVolumeClaims.", reason="FailedScheduling")
+    ]
+    return _unscheduled(
+        c,
+        pvc_claim_names=["demo-pvc"],
+        pvcs=[make_pvc(name="demo-pvc", phase="Bound", storage_class_name="standard")],
+    )
