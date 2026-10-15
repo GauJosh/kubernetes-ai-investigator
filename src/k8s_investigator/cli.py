@@ -28,13 +28,31 @@ from .validation import validate_bundle_integrity
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="investigate")
+    parser = argparse.ArgumentParser(
+        prog="investigate",
+        description=(
+            "Evidence-first, read-only Kubernetes investigation. Collects a bounded, "
+            "frozen snapshot of a Pod's evidence, correlates it deterministically (rules "
+            "R1-R11), and produces a report whose findings are always traceable to specific, "
+            "validated evidence -- no AI model is required. Run `investigate investigate pod "
+            "--help` for the full set of options, including offline replay (--from-bundle), "
+            "safe-by-default evidence export (--save-bundle), and optional AI hypotheses "
+            "(--with-ai-hypotheses)."
+        ),
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     investigate = subparsers.add_parser("investigate", help="run an investigation")
     investigate_sub = investigate.add_subparsers(dest="resource", required=True)
 
-    pod = investigate_sub.add_parser("pod", help="investigate a single Pod")
+    pod = investigate_sub.add_parser(
+        "pod",
+        help="investigate a single Pod",
+        description=(
+            "Investigate one Pod. Reads live from a cluster by default, or replays an "
+            "already-saved EvidenceBundle with --from-bundle (no cluster access at all)."
+        ),
+    )
     pod.add_argument("name", help="name of the Pod to investigate")
     pod.add_argument("--namespace", "-n", default="default")
     pod.add_argument(

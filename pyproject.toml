@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "k8s-investigator"
 version = "0.1.0"
-description = "Evidence-first, read-only Kubernetes investigation engine (Milestone 1: Startup-fault rules)"
+description = "Evidence-first, read-only Kubernetes Pod investigation CLI with deterministic diagnostic rules and optional AI hypotheses"
 requires-python = ">=3.10"
 readme = "README.md"
 dependencies = [

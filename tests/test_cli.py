@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from k8s_investigator.cli import main
 from k8s_investigator.models.evidence import EvidenceBundle
 from k8s_investigator.validation import validate_bundle_integrity
@@ -26,6 +28,24 @@ def _write_bundle(tmp_path, client) -> str:
     path = tmp_path / "bundle.json"
     path.write_text(bundle.model_dump_json(), encoding="utf-8")
     return str(path)
+
+
+def test_top_level_help_describes_what_the_tool_does(capsys):
+    """A brand-new user's first command is often --help -- it must say what this tool is,
+    not just list bare subcommand names (regression guard for the MVP quick-start docs)."""
+    from k8s_investigator.cli import build_parser
+
+    help_text = build_parser().format_help()
+    assert "read-only" in help_text
+    assert "R1-R11" in help_text
+
+
+def test_pod_subcommand_help_mentions_offline_replay(capsys):
+    with pytest.raises(SystemExit):
+        main(["investigate", "pod", "--help"])
+    help_text = capsys.readouterr().out
+    assert "already-saved EvidenceBundle" in help_text
+    assert "--from-bundle" in help_text
 
 
 def test_cli_from_bundle_json_output(tmp_path, capsys):

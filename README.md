@@ -5,22 +5,22 @@ snapshot of a Pod's evidence, correlates it deterministically, and produces a re
 findings are always traceable to specific, validated evidence — no AI model is required for any
 of this.
 
-**Current scope: Milestone 2 (complete, including the R9 follow-up).** Rules R1–R4 diagnose
-Startup-fault–category failures (image pull: DNS failure, tag/reference not found, registry
-authorization failure; and a bounded, log-assisted crash-diagnosis rule with an explicit
-"insufficient evidence" outcome) from namespace-scoped evidence only. Rules R5–R10 diagnose
-Scheduling-fault–category failures (node cordon, resource capacity, taint/toleration, node
-selector/affinity, pod anti-affinity — now confirmed against real sibling-Pod placement, not
-just the scheduler's message — unbound PersistentVolumeClaim) for Pods that are `Pending` and
-unscheduled, using `Node`/`PersistentVolume`/`PersistentVolumeClaim`/sibling-`Pod` evidence
-collected **only** when that scheduling-blocked condition (and, for siblings, a usable
-ReplicaSet selector) is already visible on the Pod's own evidence. See
-`docs/phase-0.8-mvp-blueprint.md` for the approved architecture, `docs/phase-0.9-milestone-1-notes.md`
-for Milestone 1, and `docs/phase-0.10-milestone-2-notes.md` for Milestone 2 and the R9 follow-up.
+**Current scope: 11 deterministic rules across three fault categories, plus optional AI
+hypotheses.** Rules R1–R4 diagnose Startup-fault failures (image pull: DNS failure, tag/reference
+not found, registry authorization failure; and a bounded, log-assisted crash-diagnosis rule with
+an explicit "insufficient evidence" outcome). Rules R5–R10 diagnose Scheduling-fault failures
+(node cordon, resource capacity, taint/toleration, node selector/affinity, pod anti-affinity —
+confirmed against real sibling-Pod placement, not just the scheduler's message — unbound
+PersistentVolumeClaim) for Pods that are `Pending` and unscheduled. R11 diagnoses liveness/
+readiness probe failures, correlated with the container's actual status. AI hypotheses
+(`--with-ai-hypotheses`) are entirely optional, off by default, and never required to get a
+useful report. See `docs/phase-0.8-mvp-blueprint.md` for the approved architecture and
+`docs/phase-0.9-milestone-1-notes.md`/`docs/phase-0.10-milestone-2-notes.md`/
+`docs/phase-0.13-probe-failure-rule-design.md` for what each milestone built.
 
-**This is a design-and-research project's first working slice, not a production tool.** It is
-read-only by construction: no write, `exec`, `attach`, `port-forward`, or eviction call exists
-anywhere in this codebase, and `Secret` objects are never read.
+**This is read-only by construction**: no write, `exec`, `attach`, `port-forward`, or eviction
+call exists anywhere in this codebase, and `Secret` objects are never read. Saved evidence
+bundles are sanitized by default before being written to disk.
 
 ## Installation
 
@@ -35,6 +35,62 @@ pip install -e ".[dev]"
 This installs the `investigate` console script and the `k8s_investigator` package. Installing
 the package does **not** require a Kubernetes cluster — the `kubernetes` client library is a
 dependency, but nothing at import or install time contacts a cluster.
+
+## Quick start
+
+A copy-paste walkthrough of the full workflow — install, discover the commands, run a real
+investigation, optionally add AI, export safely, and reproduce offline. Steps 5 and 6 (offline
+replay) are exactly what this project's own automated tests run and assert on
+(`tests/test_cli.py::test_cli_documented_offline_example_against_the_committed_bundle`); steps 3
+and 4 show the live-collection command shape this project's CLI implements and its
+live-collection code paths are unit-tested with a fake client, but — consistent with "no live
+cluster was accessed to build, test, or verify this project" elsewhere in this document —
+running them against a *real* cluster is not something this project's own test suite can
+exercise.
+
+```bash
+# 1. Install (see Installation above)
+pip install -e ".[dev]"
+
+# 2. Discover what the CLI can do
+investigate --help
+investigate investigate pod --help
+
+# 3. Investigate a real cluster Pod, saving a sanitized evidence bundle and a report
+investigate investigate pod my-pod --namespace my-ns \
+    --kubeconfig ~/.kube/config --context my-context \
+    --save-bundle my-investigation-bundle.json \
+    --out my-investigation-report.txt
+
+# 4. (Optional) re-run the same investigation with AI hypotheses enabled -- requires
+#    `pip install -e ".[ai]"` plus AI_HYPOTHESIS_PROVIDER=openai, OPENAI_API_KEY, and
+#    AI_HYPOTHESIS_MODEL in the environment (see "Enabling AI hypotheses" below); omitting
+#    this step is a complete, useful workflow on its own.
+export AI_HYPOTHESIS_PROVIDER=openai
+export OPENAI_API_KEY=sk-...
+export AI_HYPOTHESIS_MODEL=gpt-4o-mini
+investigate investigate pod my-pod --namespace my-ns \
+    --kubeconfig ~/.kube/config --context my-context \
+    --with-ai-hypotheses
+
+# 5. Reproduce the investigation entirely offline from the bundle saved in step 3 -- no
+#    cluster access, no AI provider, same deterministic findings every time
+investigate investigate pod my-pod --namespace my-ns \
+    --from-bundle my-investigation-bundle.json
+
+# 6. Don't have a live cluster handy? Try the same offline step against the committed example
+#    bundle (step 5's command, pointed at a real, synthetic, credential-free fixture instead):
+investigate investigate pod demo-pod --namespace demo-ns \
+    --from-bundle tests/fixtures/bundles/r1_dns_failure_bundle.json
+```
+
+What to expect: step 3/6 print a report with `DETERMINISTIC FINDINGS`, `OBSERVED FACTS`,
+`EVIDENCE GAPS`, and `NEXT STEPS` sections — every finding cites the exact evidence it came from.
+If something in your cluster isn't covered by a rule, you'll see an explicit "insufficient
+evidence" result, never a silent guess. If a genuine usage/collection problem occurs (a bad
+path, a cluster permission problem), the CLI prints a one-line `error:` message and exits
+non-zero; if only the optional AI step is misconfigured (step 4), it prints a `warning:` and
+still exits `0` with the full deterministic report intact — see "Understanding failures" below.
 
 ## Usage
 
@@ -119,6 +175,45 @@ deployment-time decision outside this project's scope, per the approved decision
 repository runs against synthetic evidence bundles and a fake Kubernetes client — see Testing,
 below.
 
+### Enabling AI hypotheses (optional)
+
+`--with-ai-hypotheses` is off by default and never required — the deterministic findings above
+are already a complete, useful report on their own. To turn it on, install the optional `openai`
+dependency and set three environment variables before running `investigate` (only the `openai`
+provider is implemented so far):
+
+```bash
+pip install -e ".[ai]"   # or add [dev,ai] to the Installation step above
+
+export AI_HYPOTHESIS_PROVIDER=openai
+export OPENAI_API_KEY=sk-...          # your own OpenAI API key -- never printed or logged
+export AI_HYPOTHESIS_MODEL=gpt-4o-mini # any OpenAI chat model that supports structured output
+
+investigate investigate pod my-pod --namespace my-ns --with-ai-hypotheses \
+    --kubeconfig ~/.kube/config --context my-context
+```
+
+If any of the three variables is missing, or the provider name isn't recognized, the CLI
+reports `ai_hypothesis_status: FAILED` with a specific, actionable message and still ships the
+full deterministic report — a misconfigured AI layer never blocks or hides a real
+investigation. A hypothesis is only ever accepted into the report if its citations pass the
+same evidence-validation every deterministic finding passes; an invalid or unsupported claim is
+rejected outright, never silently repaired. One call is made per investigation, never retried
+automatically.
+
+### Understanding failures
+
+Every error the CLI can report is a single, specific line starting `error:` (a problem with
+*what you asked for* — exit code `2` for a usage conflict like combining `--save-bundle` with
+`--from-bundle`, `1` for a collection failure like a missing bundle file or an unreachable
+cluster, `3` for an internal validation failure, `4` for a bundle-export failure) or `warning:`
+(something degraded gracefully and the rest of the report still shipped, e.g. AI hypothesis
+generation failing). None of these messages ever include a credential, a raw evidence payload,
+or (for an AI-path failure) a rejected candidate's own text — only enough detail to fix the
+problem. If a deterministic rule simply doesn't recognize your evidence, that is not an error at
+all: the report says so explicitly (an `OBSERVED_FACT` naming exactly what was and wasn't
+checked), rather than guessing at a cause or staying silent.
+
 ## What this tool does not do (by design, this milestone)
 
 - No write, mutation, `exec`, `attach`, `port-forward`, or eviction capability exists anywhere in
@@ -137,8 +232,9 @@ below.
   accepted), a real `HypothesisModelClient` adapter for the OpenAI API (an optional
   `pip install -e ".[ai]"` dependency), and a citation-reference mechanism for multiline log
   evidence (the model selects pre-issued, code-resolved references instead of constructing
-  quotes itself). 267 tests pass offline (mocked clients only). A small number of live,
-  read-only evaluation calls against real Minikube evidence have since been made (never
+  quotes itself) — all tested offline with mocked clients (see Testing below for the current
+  total). A small number of live, read-only evaluation calls against real Minikube evidence
+  have since been made (never
   modifying the cluster) and verified the layer's safety properties — citations are rejected
   without repair when invalid, and a successful API call is never confused with an accepted
   hypothesis — though no AI hypothesis has yet been confirmed reaching a final report through
@@ -198,7 +294,8 @@ pytest
 ```
 
 All tests run against synthetic `EvidenceBundle` fixtures and a fake Kubernetes client
-(`tests/fakes.py`) — none require a cluster, and none are skipped or marked pending. See
+(`tests/fakes.py`) — none require a cluster, and none are skipped or marked pending. 333 tests
+pass as of this entry (no live Kubernetes access, no paid model call in that count). See
 `docs/phase-0.9-milestone-1-notes.md` and `docs/phase-0.10-milestone-2-notes.md` for the actual
 test run output from each implementation phase.
 
@@ -216,14 +313,18 @@ src/k8s_investigator/
   graph.py         structural relationship resolution (owner chain, ServiceAccount link,
                    Node/PersistentVolume/PersistentVolumeClaim/sibling-Pod classification)
   rules/
-    engine.py        R1-R4 (Startup-fault) and wiring for R5-R10
+    engine.py        R1-R4 (Startup-fault) and wiring for R5-R10/R11
     scheduling.py     R5-R10 (Scheduling-fault, including R9's sibling-Pod correlation)
+    health.py         R11 (Runtime-health-fault: liveness/readiness probe failures)
     contradictions.py  the two contradiction detectors
     patterns.py        the named, non-exhaustive substring/quantity-parsing rule bank
   bundle_builder.py   collector output -> typed, content-hashed EvidenceBundle
+  export_sanitization.py  sanitized-by-default --save-bundle export
   report_builder.py   validated findings -> InvestigationReport
   rendering.py     human-readable report rendering
-  collector/       the narrow, ten-call-surface Kubernetes client and orchestration
+  collector/       the narrow Kubernetes client and orchestration (read-only, bounded)
+  ai/              optional AI-hypothesis layer (off by default) -- model input projection,
+                   candidate parsing/validation, redaction, the OpenAI adapter
   cli.py           `investigate pod <name> ...`
 tests/             synthetic fixtures + a fake Kubernetes client; no live cluster
 docs/              the full research, design, and decision record for this project
