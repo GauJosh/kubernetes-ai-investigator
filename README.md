@@ -250,16 +250,42 @@ Windows `kubectl.exe` fails with `error: unknown command "kai" for "kubectl"` re
 which shell you launch it from. The only way to get the actual `kubectl kai ...` plugin form
 working on Windows is to run a Linux `kubectl` inside WSL, where `kubectl`'s own plugin lookup
 uses real Linux executable-bit semantics (the Linux/Mac steps above apply unchanged once you're
-inside a WSL shell using its own `kubectl`):
+inside a WSL shell using its own `kubectl`).
+
+**WSL is a separate Linux environment with its own Python** — a `pip install` done from
+Windows (even against the same repo, mounted at e.g. `/mnt/c/...` or `/mnt/g/...`) does **not**
+install anything inside WSL. `kubectl plugin list` can correctly find `kubectl-kai` on PATH
+while `kai` itself is still completely missing — the plugin script will then fail with its own
+clear "`kai` is not installed or not on PATH" error (or, calling `kai` directly without the
+plugin, your shell's own "command not found"). Install `kai` inside WSL too, exactly as in the
+main Installation section above, just run from a WSL terminal.
+
+**If your repo lives on a Windows-mounted drive (`/mnt/c/...`, `/mnt/g/...`, etc. — true for
+most WSL setups), do not name the WSL venv `.venv` inside that same repo directory.** Windows
+and WSL share that filesystem, but a venv is not portable between them: running
+`python3 -m venv .venv` there reuses the *same directory* Windows' own `.venv` lives in and
+silently overwrites its `pyvenv.cfg` with Linux paths, breaking the Windows venv (confirmed
+directly — this is not a hypothetical). Give the WSL venv its own name instead:
 
 ```bash
-# from inside a WSL terminal, using WSL's own kubectl (not the Windows one)
+# from inside a WSL terminal, using WSL's own kubectl and its own Python -- neither is shared
+# with Windows, even though the repo itself can be the same mounted path (e.g. /mnt/c/... or
+# /mnt/g/...)
 wsl
+cd /path/to/kubernetes-ai-investigator   # the repo, from WSL's point of view
+python3 -m venv .venv-wsl && source .venv-wsl/bin/activate   # NOT .venv -- see note above
+pip install -e ".[dev]"
+
 cp integrations/kubectl/kubectl-kai /usr/local/bin/kubectl-kai
 chmod +x /usr/local/bin/kubectl-kai
 kubectl plugin list   # should now list kubectl-kai
-kubectl kai pod rag-service -n devops-genai
+kai pod rag-service -n devops-genai           # works directly once installed
+kubectl kai pod rag-service -n devops-genai   # and now works through the plugin too
 ```
+
+(`.venv-wsl` only needs to be `.gitignore`d the same way `.venv` already is if you keep the
+repo on the shared drive — add it locally, or use any name/location you like, as long as it
+isn't `.venv` on a path Windows also uses.)
 
 **If you're on native Windows (PowerShell, cmd, or Git Bash) without WSL**, skip the plugin
 entirely — `kai` and `investigate` are native Windows executables already (`kai.exe`), need no
