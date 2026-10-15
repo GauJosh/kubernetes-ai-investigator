@@ -456,3 +456,132 @@ def scheduling_blocked_nodes_unavailable() -> FakeKubernetesClient:
     c.pod = make_pod(unscheduled=True)
     c.nodes_error = ApiForbiddenError("nodes is forbidden for this user")
     return _with_owner_chain(c)
+
+
+# --- R11 (Runtime-health-fault, Phase 0.13) ---------------------------------------------------
+#
+# Message text verified verbatim against docs/research/cloud-opsbench-evidence-feasibility.md
+# (startup/60): "Liveness probe failed: ... connection refused" / "Readiness probe failed: ...
+# connection refused".
+
+_R11_LIVENESS_MESSAGE = (
+    'Liveness probe failed: Get "http://10.244.0.5:8080/healthz": dial tcp '
+    "10.244.0.5:8080: connect: connection refused"
+)
+_R11_READINESS_MESSAGE = (
+    'Readiness probe failed: Get "http://10.244.0.5:8080/healthz": dial tcp '
+    "10.244.0.5:8080: connect: connection refused"
+)
+
+
+def r11_liveness_probe_failure_confirmed() -> FakeKubernetesClient:
+    """Positive case: a liveness-probe-failure event, a container not yet crash-looping (proves
+    R11 fires on an earlier signal than R4), and a restartCount consistent with the event."""
+    c = FakeKubernetesClient()
+    c.pod = make_pod(running=True, restart_count=3)
+    c.events = [
+        make_event(
+            _R11_LIVENESS_MESSAGE, reason="Unhealthy", count=3,
+            field_path="spec.containers{server}",
+        )
+    ]
+    return _with_owner_chain(c)
+
+
+def r11_readiness_probe_failure_confirmed() -> FakeKubernetesClient:
+    """Positive case: a readiness-probe-failure event and a container currently not ready."""
+    c = FakeKubernetesClient()
+    c.pod = make_pod(running=True, ready=False)
+    c.events = [
+        make_event(
+            _R11_READINESS_MESSAGE, reason="Unhealthy",
+            field_path="spec.containers{server}",
+        )
+    ]
+    return _with_owner_chain(c)
+
+
+def r11_probe_type_unrecognized() -> FakeKubernetesClient:
+    """An 'Unhealthy' event whose message matches neither the liveness nor readiness
+    substring -- must abstain, not guess which probe class it belongs to."""
+    c = FakeKubernetesClient()
+    c.pod = make_pod(running=True)
+    c.events = [
+        make_event(
+            "Startup probe failed: container is not yet ready", reason="Unhealthy",
+            field_path="spec.containers{server}",
+        )
+    ]
+    return _with_owner_chain(c)
+
+
+def r11_container_not_identified() -> FakeKubernetesClient:
+    """A liveness-probe-failure event whose involvedObject.fieldPath does not resolve to any
+    known container -- strict identification only, no single-container fallback."""
+    c = FakeKubernetesClient()
+    c.pod = make_pod(running=True, restart_count=3)
+    c.events = [
+        make_event(
+            _R11_LIVENESS_MESSAGE, reason="Unhealthy", count=3,
+            field_path="spec.containers{does-not-exist}",
+        )
+    ]
+    return _with_owner_chain(c)
+
+
+def r11_status_not_corroborating() -> FakeKubernetesClient:
+    """A liveness-probe-failure event is recorded, but the container's restartCount is 0 --
+    event and status disagree; R11 must not assert a DETERMINISTIC_FINDING from this alone."""
+    c = FakeKubernetesClient()
+    c.pod = make_pod(running=True)  # restart_count defaults to 0
+    c.events = [
+        make_event(
+            _R11_LIVENESS_MESSAGE, reason="Unhealthy",
+            field_path="spec.containers{server}",
+        )
+    ]
+    return _with_owner_chain(c)
+
+
+def r11_unrelated_events_ignored() -> FakeKubernetesClient:
+    """A healthy pod with only unrelated (non-Unhealthy) events -- R11 must produce nothing."""
+    c = FakeKubernetesClient()
+    c.pod = make_pod(running=True)
+    c.events = [
+        make_event("Successfully assigned demo-ns/demo-pod to worker-01", reason="Scheduled", event_type="Normal"),
+        make_event("Started container server", reason="Started", event_type="Normal"),
+    ]
+    return _with_owner_chain(c)
+
+
+def r11_liveness_and_readiness_both_present() -> FakeKubernetesClient:
+    """Both probe classes fail for the same container at once -- R11 must evaluate each
+    independently rather than merging or arbitrarily picking one."""
+    c = FakeKubernetesClient()
+    c.pod = make_pod(running=True, restart_count=2, ready=False)
+    c.events = [
+        make_event(
+            _R11_LIVENESS_MESSAGE, reason="Unhealthy", count=2,
+            field_path="spec.containers{server}",
+        ),
+        make_event(
+            _R11_READINESS_MESSAGE, reason="Unhealthy",
+            field_path="spec.containers{server}", name="demo-pod.ev2",
+        ),
+    ]
+    return _with_owner_chain(c)
+
+
+def r11_coexists_with_r4_log_pattern() -> FakeKubernetesClient:
+    """A crash-looping container with both a recognized R4 log pattern and a liveness-probe-
+    failure event -- R11 and R4 are complementary, not competing, and must both fire."""
+    c = FakeKubernetesClient()
+    c.pod = make_pod(crash_loop=True, last_terminated_reason="Error", restart_count=3)
+    c.events = [
+        make_event(
+            _R11_LIVENESS_MESSAGE, reason="Unhealthy", count=3,
+            field_path="spec.containers{server}",
+        )
+    ]
+    c.logs["server"] = "starting up\nFatal error: can't open the RDB file dump.rdb: Permission denied\n"
+    return _with_owner_chain(c)

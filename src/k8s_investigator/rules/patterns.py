@@ -101,6 +101,20 @@ INSUFFICIENT_MEMORY_SUBSTRING = "insufficient memory"
 UNSCHEDULABLE_SUBSTRING = "were unschedulable"
 
 
+# --- Phase 0.13 (R11, Runtime-health-fault category) -----------------------------------------
+#
+# Kubernetes reports both liveness and readiness probe failures under the single Event reason
+# "Unhealthy"; the message text is what distinguishes them. Verified verbatim in Phase 0.6
+# (startup/60, docs/research/cloud-opsbench-evidence-feasibility.md): "Liveness probe failed: "
+# "... connection refused" / "Readiness probe failed: ... connection refused" -- note that
+# startup/60's own real root cause (a volume-mount permission error) was classified
+# "Unavailable from permitted evidence" in that same research: these events alone do not reveal
+# *why* the probe is failing, only that it is -- exactly the claim boundary R11 enforces.
+UNHEALTHY_EVENT_REASON = "Unhealthy"
+LIVENESS_PROBE_FAILURE_SUBSTRING = "liveness probe failed"
+READINESS_PROBE_FAILURE_SUBSTRING = "readiness probe failed"
+
+
 def parse_cpu_quantity(value: str | None) -> float | None:
     """Kubernetes CPU quantities: a bare number is cores; a trailing 'm' is millicores.
     Returns cores as a float, or None if unparseable. Deliberately minimal -- covers the two

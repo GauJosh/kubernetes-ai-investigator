@@ -27,6 +27,8 @@ def make_pod(
     crash_loop: bool = False,
     last_terminated_reason: str | None = None,
     restart_count: int = 0,
+    ready: bool | None = None,  # Phase 0.13 (R11): overrides the running/waiting default below --
+    # only make_pod(running=True) needs this, to express a Running-but-not-ready container.
     service_account_name: str = "default",
     pod_image_pull_secrets: list[str] | None = None,
     owner_rs_name: str | None = "demo-rs",
@@ -128,6 +130,9 @@ def make_pod(
         container_status["state"] = {"running": {"startedAt": "2026-10-13T10:05:00Z"}}
         container_status["ready"] = True
 
+    if ready is not None:
+        container_status["ready"] = ready
+
     return {
         "apiVersion": "v1",
         "kind": "Pod",
@@ -151,12 +156,18 @@ def make_event(
     first_timestamp: str = "2026-10-13T10:01:00Z",
     last_timestamp: str = "2026-10-13T10:01:30Z",
     count: int = 1,
+    field_path: str | None = None,  # Phase 0.13 (R11): e.g. "spec.containers{server}" --
+    # real Kubernetes sets this on a container-scoped event; omitted by default since R1-R10
+    # never read it.
 ) -> dict[str, Any]:
+    involved_object: dict[str, Any] = {"kind": "Pod", "name": pod_name, "namespace": namespace}
+    if field_path is not None:
+        involved_object["fieldPath"] = field_path
     return {
         "apiVersion": "v1",
         "kind": "Event",
         "metadata": {"name": name, "namespace": namespace, "resourceVersion": "500"},
-        "involvedObject": {"kind": "Pod", "name": pod_name, "namespace": namespace},
+        "involvedObject": involved_object,
         "reason": reason,
         "message": message,
         "type": event_type,

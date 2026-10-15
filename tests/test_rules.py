@@ -144,3 +144,87 @@ def test_reproducibility_identical_bundle_identical_findings():
     assert [f.id for f in findings_a] == [f.id for f in findings_b]
     assert findings_a == findings_b
     assert contradictions_a == contradictions_b
+
+
+# --- R11 (Runtime-health-fault, Phase 0.13) ---------------------------------------------------
+
+
+def _r11(findings):
+    return [f for f in findings if f.produced_by.startswith("rule:R11_")]
+
+
+def test_r11_liveness_probe_failure_confirmed_fires():
+    bundle = collect_and_build(scenarios.r11_liveness_probe_failure_confirmed())
+    findings, _ = evaluate_bundle(bundle)
+    r11 = _r11(findings)
+    assert len(r11) == 1
+    assert r11[0].kind == FindingKind.DETERMINISTIC_FINDING
+    assert r11[0].produced_by == "rule:R11_liveness_probe_failure"
+    assert "liveness-probe-failure" in r11[0].statement.lower()
+    assert "restartcount of 3" in r11[0].statement.lower()
+    assert r11[0].limitation is not None
+    assert "does not establish why the probe is failing" in r11[0].limitation
+
+
+def test_r11_readiness_probe_failure_confirmed_fires():
+    bundle = collect_and_build(scenarios.r11_readiness_probe_failure_confirmed())
+    findings, _ = evaluate_bundle(bundle)
+    r11 = _r11(findings)
+    assert len(r11) == 1
+    assert r11[0].kind == FindingKind.DETERMINISTIC_FINDING
+    assert r11[0].produced_by == "rule:R11_readiness_probe_failure"
+    assert "readiness-probe-failure" in r11[0].statement.lower()
+    assert r11[0].limitation is not None
+
+
+def test_r11_unrecognized_probe_message_abstains():
+    bundle = collect_and_build(scenarios.r11_probe_type_unrecognized())
+    findings, _ = evaluate_bundle(bundle)
+    r11 = _r11(findings)
+    assert len(r11) == 1
+    assert r11[0].kind == FindingKind.OBSERVED_FACT
+    assert r11[0].produced_by == "rule:R11_probe_failure_unrecognized"
+
+
+def test_r11_container_not_identified_abstains():
+    bundle = collect_and_build(scenarios.r11_container_not_identified())
+    findings, _ = evaluate_bundle(bundle)
+    r11 = _r11(findings)
+    assert len(r11) == 1
+    assert r11[0].kind == FindingKind.OBSERVED_FACT
+    assert r11[0].produced_by == "rule:R11_container_not_identified"
+
+
+def test_r11_status_not_corroborating_is_observed_not_deterministic():
+    bundle = collect_and_build(scenarios.r11_status_not_corroborating())
+    findings, _ = evaluate_bundle(bundle)
+    r11 = _r11(findings)
+    assert len(r11) == 1
+    assert r11[0].kind == FindingKind.OBSERVED_FACT
+    assert r11[0].produced_by == "rule:R11_status_not_corroborating"
+
+
+def test_r11_unrelated_events_produce_no_finding():
+    bundle = collect_and_build(scenarios.r11_unrelated_events_ignored())
+    findings, _ = evaluate_bundle(bundle)
+    assert _r11(findings) == []
+
+
+def test_r11_liveness_and_readiness_both_fire_independently():
+    bundle = collect_and_build(scenarios.r11_liveness_and_readiness_both_present())
+    findings, _ = evaluate_bundle(bundle)
+    r11 = _r11(findings)
+    assert len(r11) == 2
+    rule_ids = {f.produced_by for f in r11}
+    assert rule_ids == {"rule:R11_liveness_probe_failure", "rule:R11_readiness_probe_failure"}
+    assert all(f.kind == FindingKind.DETERMINISTIC_FINDING for f in r11)
+
+
+def test_r11_coexists_with_r4_log_pattern():
+    """R11 and R4 are complementary, not competing explanations -- both must fire together."""
+    bundle = collect_and_build(scenarios.r11_coexists_with_r4_log_pattern())
+    findings, _ = evaluate_bundle(bundle)
+    det = _deterministic(findings)
+    rule_ids = {f.produced_by for f in det}
+    assert "rule:R4_log_pattern_match" in rule_ids
+    assert "rule:R11_liveness_probe_failure" in rule_ids

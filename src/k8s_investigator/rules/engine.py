@@ -1,4 +1,4 @@
-"""The deterministic rule engine: R1-R10, owner-chain facts, and contradiction detection.
+"""The deterministic rule engine: R1-R11, owner-chain facts, and contradiction detection.
 
 Every rule here is a pure function of (bundle, relationships) -> list[Finding]: no network
 calls, no datetime.now(), no randomness (docs/phase-0.8-mvp-blueprint.md §E's invariants). A
@@ -11,6 +11,11 @@ so its containerStatuses list is empty and the R1-R4 per-container loop below fi
 evaluate; evaluate_scheduling (rules/scheduling.py) internally checks
 pod_status.is_scheduling_blocked and returns [] immediately for any pod that is not Pending/
 unscheduled, so calling it unconditionally here is safe and does not need its own branch.
+
+R11 (Runtime-health-fault, rules/health.py, Phase 0.13) is also called unconditionally below --
+it scans for 'Unhealthy' events, which are independent evidence from the per-container
+waiting-reason branches above, and is deliberately allowed to fire alongside R4 (both can be
+true of the same crash-looping container at once; see rules/health.py's module note).
 """
 
 from __future__ import annotations
@@ -20,6 +25,7 @@ from ..models.findings import Finding, FindingKind
 from ..graph import RelationshipFacts, resolve_relationships
 from .base import field_locator, line_locator, make_finding
 from .contradictions import detect_contradictions, detect_scheduling_contradictions
+from .health import evaluate_health
 from .patterns import (
     AUTH_FAILURE_SUBSTRINGS,
     CRASH_LOG_SUBSTRINGS,
@@ -73,6 +79,7 @@ def evaluate_bundle(bundle: EvidenceBundle) -> tuple[list[Finding], list[Contrad
                 )
 
     findings.extend(evaluate_scheduling(pod, relationships))
+    findings.extend(evaluate_health(pod, relationships.event_items))
 
     contradictions = detect_contradictions(pod, container_statuses, relationships.event_items)
     scheduling_event = find_scheduling_event(relationships.event_items)
