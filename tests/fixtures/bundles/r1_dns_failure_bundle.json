@@ -1,0 +1,462 @@
+{
+  "id": "2cd54f6a5f52c4130a96e394e692aac2f223046e7fb44d3e264b7ad5137c32c4",
+  "investigation_target": {
+    "ref_type": "object",
+    "api_group": "",
+    "api_version": "v1",
+    "kind": "Pod",
+    "namespace": "demo-ns",
+    "name": "demo-pod",
+    "resource_version": null
+  },
+  "collected_at_range": [
+    "2026-10-15T03:59:40.786133Z",
+    "2026-10-15T03:59:40.786133Z"
+  ],
+  "items": [
+    {
+      "id": "4d062953dc8c4605dc66e38f86ab3eee4c285f897a6e7df56c9d4da36f86c5aa",
+      "source_ref": {
+        "ref_type": "object",
+        "api_group": "",
+        "api_version": "v1",
+        "kind": "Pod",
+        "namespace": "demo-ns",
+        "name": "demo-pod",
+        "resource_version": null
+      },
+      "collected_at": {
+        "value": "2026-10-15T03:59:40.786133Z",
+        "source_field": "collectedAt"
+      },
+      "payload": {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+          "name": "demo-pod",
+          "namespace": "demo-ns",
+          "uid": "pod-uid-1",
+          "creationTimestamp": "2026-10-15T03:54:40Z",
+          "ownerReferences": [
+            {
+              "kind": "ReplicaSet",
+              "name": "demo-rs",
+              "controller": true,
+              "uid": "rs-uid-1"
+            }
+          ],
+          "resourceVersion": "1000"
+        },
+        "spec": {
+          "serviceAccountName": "default",
+          "containers": [
+            {
+              "name": "server",
+              "image": "example.registry/demo:v1",
+              "resources": {}
+            }
+          ],
+          "imagePullSecrets": [],
+          "tolerations": [
+            {
+              "key": "node.kubernetes.io/not-ready",
+              "operator": "Exists",
+              "effect": "NoExecute",
+              "tolerationSeconds": 300
+            },
+            {
+              "key": "node.kubernetes.io/unreachable",
+              "operator": "Exists",
+              "effect": "NoExecute",
+              "tolerationSeconds": 300
+            }
+          ]
+        },
+        "status": {
+          "phase": "Pending",
+          "containerStatuses": [
+            {
+              "name": "server",
+              "image": "example.registry/demo:v1",
+              "restartCount": 0,
+              "ready": false,
+              "state": {
+                "waiting": {
+                  "reason": "ErrImagePull",
+                  "message": "ErrImagePull message"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "status": "PRESENT",
+      "expiry_note": null,
+      "error_detail": null
+    },
+    {
+      "id": "39c2cf7feb50c08e81191b1ce52d2239977b2bf8a885d2819d97acf0e1317063",
+      "source_ref": {
+        "ref_type": "object",
+        "api_group": "",
+        "api_version": "v1",
+        "kind": "Event",
+        "namespace": "demo-ns",
+        "name": "demo-pod.ev1",
+        "resource_version": "500"
+      },
+      "collected_at": {
+        "value": "2026-10-15T03:59:40.786133Z",
+        "source_field": "collectedAt"
+      },
+      "payload": {
+        "apiVersion": "v1",
+        "kind": "Event",
+        "metadata": {
+          "name": "demo-pod.ev1",
+          "namespace": "demo-ns",
+          "resourceVersion": "500"
+        },
+        "involvedObject": {
+          "kind": "Pod",
+          "name": "demo-pod",
+          "namespace": "demo-ns"
+        },
+        "reason": "Failed",
+        "message": "failed to pull and unpack image \"ghost-registry.example.net/demo/adservice:v0.10.3\": failed to resolve reference: failed to do request: Head \"https://ghost-registry.example.net/v2/demo/adservice/manifests/v0.10.3\": dial tcp: lookup ghost-registry.example.net on 127.0.0.53:53: no such host",
+        "type": "Warning",
+        "firstTimestamp": "2026-10-13T10:01:00Z",
+        "lastTimestamp": "2026-10-13T10:01:30Z",
+        "count": 1
+      },
+      "status": "PRESENT",
+      "expiry_note": null,
+      "error_detail": null
+    },
+    {
+      "id": "1ee10a5df63820780f90cba7812b7b5273b7445ba42c4087485e9667a43fea8b",
+      "source_ref": {
+        "ref_type": "api_call",
+        "verb": "get",
+        "path": "/api/v1/namespaces/demo-ns/pods/demo-pod/log",
+        "params": {
+          "container": "server",
+          "tailLines": 200,
+          "sinceSeconds": 7200,
+          "previous": false
+        },
+        "response_status": null
+      },
+      "collected_at": {
+        "value": "2026-10-15T03:59:40.786133Z",
+        "source_field": "collectedAt"
+      },
+      "payload": null,
+      "status": "NOT_FOUND",
+      "expiry_note": null,
+      "error_detail": null
+    },
+    {
+      "id": "f1e55e29622405ac148eb1f748fc16dc7f1c510aa691e1991ee2c3f7ff9e44f2",
+      "source_ref": {
+        "ref_type": "object",
+        "api_group": "apps",
+        "api_version": "v1",
+        "kind": "ReplicaSet",
+        "namespace": "demo-ns",
+        "name": "demo-rs",
+        "resource_version": null
+      },
+      "collected_at": {
+        "value": "2026-10-15T03:59:40.786133Z",
+        "source_field": "collectedAt"
+      },
+      "payload": {
+        "apiVersion": "apps/v1",
+        "kind": "ReplicaSet",
+        "metadata": {
+          "name": "demo-rs",
+          "namespace": "demo-ns",
+          "uid": "rs-uid-1",
+          "ownerReferences": [
+            {
+              "kind": "Deployment",
+              "name": "demo-deploy",
+              "controller": true,
+              "uid": "d-uid-1"
+            }
+          ]
+        },
+        "spec": {}
+      },
+      "status": "PRESENT",
+      "expiry_note": null,
+      "error_detail": null
+    },
+    {
+      "id": "9f0e6a9118d6d5b13720904638bb1b4150040d083b4db0bd2124af0860655145",
+      "source_ref": {
+        "ref_type": "object",
+        "api_group": "apps",
+        "api_version": "v1",
+        "kind": "Deployment",
+        "namespace": "demo-ns",
+        "name": "demo-deploy",
+        "resource_version": null
+      },
+      "collected_at": {
+        "value": "2026-10-15T03:59:40.786133Z",
+        "source_field": "collectedAt"
+      },
+      "payload": {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {
+          "name": "demo-deploy",
+          "namespace": "demo-ns"
+        }
+      },
+      "status": "PRESENT",
+      "expiry_note": null,
+      "error_detail": null
+    },
+    {
+      "id": "cd1499b2433c8a1551bf56dccebba92e11dfa40b4d6f647bdf6d6881225b8e0e",
+      "source_ref": {
+        "ref_type": "object",
+        "api_group": "",
+        "api_version": "v1",
+        "kind": "ServiceAccount",
+        "namespace": "demo-ns",
+        "name": "default",
+        "resource_version": null
+      },
+      "collected_at": {
+        "value": "2026-10-15T03:59:40.786133Z",
+        "source_field": "collectedAt"
+      },
+      "payload": {
+        "apiVersion": "v1",
+        "kind": "ServiceAccount",
+        "metadata": {
+          "name": "default",
+          "namespace": "demo-ns"
+        },
+        "imagePullSecrets": []
+      },
+      "status": "PRESENT",
+      "expiry_note": null,
+      "error_detail": null
+    }
+  ],
+  "queries": [
+    {
+      "requested": {
+        "ref_type": "object",
+        "api_group": "",
+        "api_version": "v1",
+        "kind": "Pod",
+        "namespace": "demo-ns",
+        "name": "demo-pod",
+        "resource_version": null
+      },
+      "status": "PRESENT",
+      "error_detail": null,
+      "payload": {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+          "name": "demo-pod",
+          "namespace": "demo-ns",
+          "uid": "pod-uid-1",
+          "creationTimestamp": "2026-10-15T03:54:40Z",
+          "ownerReferences": [
+            {
+              "kind": "ReplicaSet",
+              "name": "demo-rs",
+              "controller": true,
+              "uid": "rs-uid-1"
+            }
+          ],
+          "resourceVersion": "1000"
+        },
+        "spec": {
+          "serviceAccountName": "default",
+          "containers": [
+            {
+              "name": "server",
+              "image": "example.registry/demo:v1",
+              "resources": {}
+            }
+          ],
+          "imagePullSecrets": [],
+          "tolerations": [
+            {
+              "key": "node.kubernetes.io/not-ready",
+              "operator": "Exists",
+              "effect": "NoExecute",
+              "tolerationSeconds": 300
+            },
+            {
+              "key": "node.kubernetes.io/unreachable",
+              "operator": "Exists",
+              "effect": "NoExecute",
+              "tolerationSeconds": 300
+            }
+          ]
+        },
+        "status": {
+          "phase": "Pending",
+          "containerStatuses": [
+            {
+              "name": "server",
+              "image": "example.registry/demo:v1",
+              "restartCount": 0,
+              "ready": false,
+              "state": {
+                "waiting": {
+                  "reason": "ErrImagePull",
+                  "message": "ErrImagePull message"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "collected_at": "2026-10-15T03:59:40.786133Z"
+    },
+    {
+      "requested": {
+        "ref_type": "api_call",
+        "verb": "list",
+        "path": "/api/v1/namespaces/demo-ns/events",
+        "params": {
+          "fieldSelector": "involvedObject.name=demo-pod",
+          "involvedObjectUid": "pod-uid-1"
+        },
+        "response_status": null
+      },
+      "status": "PRESENT",
+      "error_detail": null,
+      "payload": [
+        {
+          "apiVersion": "v1",
+          "kind": "Event",
+          "metadata": {
+            "name": "demo-pod.ev1",
+            "namespace": "demo-ns",
+            "resourceVersion": "500"
+          },
+          "involvedObject": {
+            "kind": "Pod",
+            "name": "demo-pod",
+            "namespace": "demo-ns"
+          },
+          "reason": "Failed",
+          "message": "failed to pull and unpack image \"ghost-registry.example.net/demo/adservice:v0.10.3\": failed to resolve reference: failed to do request: Head \"https://ghost-registry.example.net/v2/demo/adservice/manifests/v0.10.3\": dial tcp: lookup ghost-registry.example.net on 127.0.0.53:53: no such host",
+          "type": "Warning",
+          "firstTimestamp": "2026-10-13T10:01:00Z",
+          "lastTimestamp": "2026-10-13T10:01:30Z",
+          "count": 1
+        }
+      ],
+      "collected_at": "2026-10-15T03:59:40.786133Z"
+    },
+    {
+      "requested": {
+        "ref_type": "api_call",
+        "verb": "get",
+        "path": "/api/v1/namespaces/demo-ns/pods/demo-pod/log",
+        "params": {
+          "container": "server",
+          "tailLines": 200,
+          "sinceSeconds": 7200,
+          "previous": false
+        },
+        "response_status": null
+      },
+      "status": "NOT_FOUND",
+      "error_detail": null,
+      "payload": null,
+      "collected_at": "2026-10-15T03:59:40.786133Z"
+    },
+    {
+      "requested": {
+        "ref_type": "object",
+        "api_group": "apps",
+        "api_version": "v1",
+        "kind": "ReplicaSet",
+        "namespace": "demo-ns",
+        "name": "demo-rs",
+        "resource_version": null
+      },
+      "status": "PRESENT",
+      "error_detail": null,
+      "payload": {
+        "apiVersion": "apps/v1",
+        "kind": "ReplicaSet",
+        "metadata": {
+          "name": "demo-rs",
+          "namespace": "demo-ns",
+          "uid": "rs-uid-1",
+          "ownerReferences": [
+            {
+              "kind": "Deployment",
+              "name": "demo-deploy",
+              "controller": true,
+              "uid": "d-uid-1"
+            }
+          ]
+        },
+        "spec": {}
+      },
+      "collected_at": "2026-10-15T03:59:40.786133Z"
+    },
+    {
+      "requested": {
+        "ref_type": "object",
+        "api_group": "apps",
+        "api_version": "v1",
+        "kind": "Deployment",
+        "namespace": "demo-ns",
+        "name": "demo-deploy",
+        "resource_version": null
+      },
+      "status": "PRESENT",
+      "error_detail": null,
+      "payload": {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {
+          "name": "demo-deploy",
+          "namespace": "demo-ns"
+        }
+      },
+      "collected_at": "2026-10-15T03:59:40.786133Z"
+    },
+    {
+      "requested": {
+        "ref_type": "object",
+        "api_group": "",
+        "api_version": "v1",
+        "kind": "ServiceAccount",
+        "namespace": "demo-ns",
+        "name": "default",
+        "resource_version": null
+      },
+      "status": "PRESENT",
+      "error_detail": null,
+      "payload": {
+        "apiVersion": "v1",
+        "kind": "ServiceAccount",
+        "metadata": {
+          "name": "default",
+          "namespace": "demo-ns"
+        },
+        "imagePullSecrets": []
+      },
+      "collected_at": "2026-10-15T03:59:40.786133Z"
+    }
+  ],
+  "contradictions": []
+}

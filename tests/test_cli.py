@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from k8s_investigator.cli import main
 
 from .conftest import collect_and_build
 from .fixtures import scenarios
+
+_COMMITTED_BUNDLE = (
+    Path(__file__).parent / "fixtures" / "bundles" / "r1_dns_failure_bundle.json"
+)
 
 
 def _write_bundle(tmp_path, client) -> str:
@@ -62,3 +67,47 @@ def test_cli_missing_bundle_file_reports_error_not_traceback(capsys):
     assert exit_code == 1
     err = capsys.readouterr().err
     assert "error:" in err
+
+
+def test_cli_save_bundle_and_from_bundle_combined_is_a_usage_error(tmp_path, capsys):
+    """Phase 0.14: --save-bundle has nothing freshly collected to save when --from-bundle is
+    also given -- this must be a clear, immediate usage error, never a silent no-op."""
+    bundle_path = _write_bundle(tmp_path, scenarios.r1_dns_failure())
+    save_path = tmp_path / "should_not_be_written.json"
+    exit_code = main(
+        [
+            "investigate", "pod", "demo-pod", "--namespace", "demo-ns",
+            "--from-bundle", bundle_path, "--save-bundle", str(save_path),
+        ]
+    )
+    assert exit_code == 2
+    err = capsys.readouterr().err
+    assert "error:" in err
+    assert "cannot be combined" in err
+    assert not save_path.exists()
+
+
+def test_cli_documented_offline_example_against_the_committed_bundle(capsys):
+    """The exact command README.md documents as the offline-usage example, run against the
+    real, committed EvidenceBundle fixture (not a bundle built ad hoc in this test) -- proves
+    a fresh clone can follow that example verbatim with no cluster, no internal test helper,
+    and no undocumented step."""
+    assert _COMMITTED_BUNDLE.exists(), f"README's documented fixture is missing: {_COMMITTED_BUNDLE}"
+
+    base_args = [
+        "investigate", "pod", "demo-pod", "--namespace", "demo-ns",
+        "--from-bundle", str(_COMMITTED_BUNDLE),
+    ]
+
+    exit_code = main(base_args + ["--output", "text"])
+    assert exit_code == 0
+    text_out = capsys.readouterr().out
+    assert "DNS resolution failure" in text_out
+    assert "rule:R1_dns_failure" in text_out
+
+    exit_code = main(base_args + ["--output", "json"])
+    assert exit_code == 0
+    json_out = capsys.readouterr().out
+    report = json.loads(json_out)  # must remain valid, parseable JSON
+    assert len(report["deterministic_findings"]) == 1
+    assert report["deterministic_findings"][0]["produced_by"] == "rule:R1_dns_failure"

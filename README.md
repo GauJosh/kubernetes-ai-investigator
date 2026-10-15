@@ -41,19 +41,38 @@ dependency, but nothing at import or install time contacts a cluster.
 ### Offline, fixture-based (no cluster required)
 
 This is the primary, fully-tested path for this milestone. Point the CLI at an already-saved
-`EvidenceBundle` JSON file — either one `investigate` saved earlier (`--save-bundle`), or one
-hand-built as a test fixture (see `tests/fixtures/`):
+`EvidenceBundle` JSON file — either one `investigate` saved earlier (`--save-bundle`, on a live
+collection only — see below), or the real, committed example bundle at
+`tests/fixtures/bundles/r1_dns_failure_bundle.json` (a small, synthetic DNS-image-pull-failure
+case; nothing in it was collected from a real cluster, and it contains no credentials of any
+kind). This exact command works from a fresh clone with no cluster access, no AI provider
+configured, and no internal test helper imported — verified by
+`tests/test_cli.py::test_cli_documented_offline_example_against_the_committed_bundle`:
 
 ```bash
-investigate investigate pod my-pod --namespace my-ns --from-bundle tests/fixtures/r1_dns_failure.json
+investigate investigate pod demo-pod --namespace demo-ns \
+    --from-bundle tests/fixtures/bundles/r1_dns_failure_bundle.json
 ```
 
 (The repeated `investigate investigate` is intentional: `investigate` is the installed command;
 `investigate` is also the CLI's own subcommand name, matching the `investigate pod/<name>`
-phrasing used throughout this project's design documents.)
+phrasing used throughout this project's design documents. `demo-pod`/`demo-ns` only need to
+match this particular bundle's own recorded target for the report to describe itself
+accurately — `--from-bundle` loads the bundle exactly as saved and does not re-collect, so these
+two values are not otherwise used to filter or re-fetch anything.)
+
+This should print a report whose `DETERMINISTIC FINDINGS` section includes a `rule:R1_dns_failure`
+finding, and whose `EVIDENCE GAPS` section honestly shows the one piece of evidence this
+scenario's collection did not find (the container's logs).
+
+A hand-built fixture is also supported the same way — see `tests/fixtures/scenarios.py` for how
+the committed example above was produced, if you want to build your own for a different
+scenario.
 
 Add `--output json`, `--output text` (default), or `--output both`; add `--out PATH` to write to
-a file instead of stdout.
+a file instead of stdout. `--save-bundle` and `--from-bundle` cannot be combined (there is
+nothing freshly collected to save when loading an already-saved bundle); the CLI rejects that
+combination immediately with a usage error rather than silently doing nothing.
 
 ### Live collection (requires a cluster and RBAC — not exercised by this project's own tests)
 

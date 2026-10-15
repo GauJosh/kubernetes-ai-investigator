@@ -74,6 +74,16 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help(sys.stderr)
         return 2
 
+    if args.from_bundle and args.save_bundle:
+        print(
+            "error: --save-bundle and --from-bundle cannot be combined -- --from-bundle loads "
+            "an already-collected bundle rather than collecting a new one, so there is nothing "
+            "freshly collected to save. Pass --save-bundle on its own (without --from-bundle) "
+            "to collect live and save the result.",
+            file=sys.stderr,
+        )
+        return 2
+
     try:
         bundle = _load_or_collect_bundle(args)
     except Exception as exc:  # noqa: BLE001 -- a CLI boundary; report, don't crash with a traceback
