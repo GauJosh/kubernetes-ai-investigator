@@ -94,3 +94,22 @@ def test_set_includes_a_recorded_contradiction_scenario():
     for scenario in contradiction_scenarios:
         _, contradictions = evaluate_bundle(scenario.bundle)
         assert len(contradictions) >= 1
+
+
+def test_set_includes_an_underdetermined_partial_evidence_scenario():
+    """Distinct from the zero-evidence abstention scenarios: some evidence exists, but the
+    deterministic layer explicitly says it does not fully explain the failure -- a different
+    uncertainty shape, not just 'nothing was found at all'."""
+    scenario = next(s for s in EVAL_SCENARIOS if s.name == "r5_partial_cordon_underdetermined")
+    det = [f for f in scenario.findings if f.kind.value == "DETERMINISTIC_FINDING"]
+    assert det == []  # no confirmed cause
+    assert len(scenario.findings) >= 1  # but evidence/observed facts do exist
+
+
+def test_set_covers_at_least_three_distinct_deterministic_rules_among_already_explained_cases():
+    """Breadth check: 'already explained' coverage must span more than one rule, so a model
+    generalizing 'do not contradict a deterministic finding' is tested across causes, not
+    just the one rule the original set happened to include."""
+    already_explained = [s for s in EVAL_SCENARIOS if "already" in s.name]
+    rule_ids = {f.produced_by for s in already_explained for f in s.findings if f.kind.value == "DETERMINISTIC_FINDING"}
+    assert len(rule_ids) >= 3

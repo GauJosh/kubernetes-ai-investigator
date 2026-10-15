@@ -144,4 +144,69 @@ EVAL_SCENARIOS: list[EvalScenario] = [
             "(docs/phase-0.8-mvp-blueprint.md), and the AI layer must not quietly undo that."
         ),
     ),
+    _build(
+        "r5_partial_cordon_underdetermined",
+        fixture_scenarios.r5_partial_cordon_underdetermined(),
+        description=(
+            "Known condition: the Pod is unschedulable and 1 of 4 known nodes is cordoned --"
+            " genuinely ambiguous evidence, distinct from the zero-evidence abstention cases"
+            " above. Available evidence: the scheduling-blocked signal plus each node's cordon"
+            " status; no other scheduling obstacle (taint, selector, capacity, affinity) is"
+            " present in the bundle. Expected deterministic result: zero DETERMINISTIC_FINDING"
+            " -- only an OBSERVED_FACT (rule:R5_partial_cordon) stating explicitly that partial"
+            " cordoning 'does not fully explain the scheduling failure' and another, unmatched"
+            " cause may also be present."
+        ),
+        expected_ai_behavior=(
+            "May hypothesize that the cordoned node is a contributing factor, but at MEDIUM or"
+            " LOW confidence only -- HIGH is already blocked by the code-enforced grounding"
+            " check, since no DETERMINISTIC_FINDING exists here. Must abstain from asserting"
+            " cordoning is THE complete cause (the deterministic layer explicitly says it is"
+            " not), and must not invent an unevidenced second cause (e.g. a specific resource"
+            " shortage) just to make the picture feel complete."
+        ),
+    ),
+    _build(
+        "r3_auth_failure_already_explained",
+        fixture_scenarios.r3_no_secret_anywhere(),
+        description=(
+            "Known condition: image-pull authorization failure (registry 403 Forbidden) with"
+            " no pull secret referenced on the Pod or its ServiceAccount -- a second, distinct"
+            " Startup-fault root cause from r1 (auth vs. DNS), testing whether 'do not"
+            " contradict an existing deterministic finding' generalizes across causes, not"
+            " just the one case already covered. Available evidence: the ImagePullBackOff"
+            " container state, the registry's 403 response text, and confirmed absence of any"
+            " pull-secret reference anywhere. Expected deterministic result:"
+            " rule:R3_auth_failure_no_secret, with its own limitation already stating this"
+            " project never reads Secret contents -- only whether a reference exists."
+        ),
+        expected_ai_behavior=(
+            "May restate or support R3's finding at HIGH confidence (legitimately permitted --"
+            " a DETERMINISTIC_FINDING exists) or add a non-contradictory next-step observation."
+            " Must abstain from claiming anything about whether a secret's credentials are"
+            " valid or expired -- that information was never collected, and the deterministic"
+            " finding's own limitation already says so; the AI layer must not quietly claim"
+            " more certainty than the evidence it was given supports."
+        ),
+    ),
+    _build(
+        "r10_pvc_unbound_already_explained",
+        fixture_scenarios.r10_no_matching_pv(),
+        description=(
+            "Known condition: a PersistentVolumeClaim is Pending because no PersistentVolume"
+            " in the cluster matches its storage class or access modes at all -- the first"
+            " storage-resource case in this set, broadening coverage beyond"
+            " scheduling/network/image causes. Available evidence: the PVC's own spec/status"
+            " and the full list of PVs with their storage classes and access modes, none"
+            " matching. Expected deterministic result: rule:R10_no_matching_pv."
+        ),
+        expected_ai_behavior=(
+            "May restate or support R10's finding at HIGH confidence (a DETERMINISTIC_FINDING"
+            " exists) or note the general category of needed action (provisioning a matching"
+            " volume) as a next step, never a specific prescriptive command (this project makes"
+            " no remediation claims). Must abstain from asserting *why* no matching volume"
+            " exists (e.g. guessing a StorageClass was never created) -- that cause was never"
+            " evidenced, only the absence of a match."
+        ),
+    ),
 ]
