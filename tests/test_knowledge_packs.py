@@ -28,6 +28,7 @@ from .fixtures import scenarios
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE_PACK_PATH = str(REPO_ROOT / ".kai" / "knowledge.yaml")
+_COMMITTED_BUNDLE_PATH = str(REPO_ROOT / "tests" / "fixtures" / "bundles" / "r1_dns_failure_bundle.json")
 
 
 def _postgres_bundle():
@@ -80,6 +81,32 @@ def test_example_pack_second_rule_matches_the_configmap_scenario_via_container_w
     matches = evaluate_knowledge_pack(pack, bundle)
     ids = [m.finding.produced_by for m in matches]
     assert "knowledge:missing-configmap-or-secret-reference" in ids
+
+
+def test_readme_try_it_immediately_example_actually_works_against_the_committed_bundle(capsys):
+    """Guards the exact "try it immediately, zero setup" promise the README makes for the
+    shipped example pack: running it against this repository's own committed, credential-free
+    bundle (no bundle-building step a new user would have to improvise) must produce a real
+    CUSTOM KNOWLEDGE GUIDANCE match, not an empty/no-match result. If this ever regresses
+    (the committed bundle's wording changes, or the example pack's rules change), the README's
+    copy-paste example silently stops working -- this test exists so that is caught here
+    instead of by a confused new user."""
+    exit_code = main(
+        [
+            "pod", "demo-pod", "--namespace", "demo-ns",
+            "--from-bundle", _COMMITTED_BUNDLE_PATH,
+            "--knowledge", EXAMPLE_PACK_PATH,
+            "--output", "json",
+        ]
+    )
+    assert exit_code == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["knowledge_pack_source"] == EXAMPLE_PACK_PATH
+    assert report["custom_guidance"]
+    assert any(
+        m["finding"]["produced_by"] == "knowledge:internal-registry-outage"
+        for m in report["custom_guidance"]
+    )
 
 
 # --- A match contributes guidance without altering built-in findings ---------------------

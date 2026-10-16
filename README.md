@@ -356,6 +356,13 @@ source in this project): a pack file is at most 1,000,000 bytes; at most 100 rul
 most 20 `evidence_contains` entries and 20 `next_checks` per rule; every string field (summary,
 description, each check, each substring) is at most 2,000 characters.
 
+**YAML quoting tip:** a `#` preceded by a space starts a *comment* in plain YAML text, and
+everything after it on that line is silently dropped by the YAML parser itself — before `kai`
+ever sees it, and with no warning from `kai` or anyone else. This bites a `next_checks` entry
+or `summary` that references a Slack channel name (`#database-oncall`) or anything else
+containing ` #`. Quote the string to keep the whole thing: `- "Check #database-oncall for an
+open incident."`
+
 ### Using it
 
 ```bash
@@ -372,11 +379,13 @@ wasn't supplied). The same pack and the same evidence always produce the same re
 about matching depends on timing, randomness, or AI.
 
 A small, sanitized example pack ships in this repository at `.kai/knowledge.yaml` (with a
-runbook at `.kai/runbooks/database-connectivity.md`) so you can try the feature immediately:
+runbook at `.kai/runbooks/database-connectivity.md`) so you can try the feature immediately,
+with zero setup, against this repository's own committed synthetic bundle:
 
 ```bash
-# Build a synthetic bundle whose logs contain "Connection refused", then:
-kai pod demo-pod -n demo-ns --from-bundle synthetic-bundle.json --knowledge .kai/knowledge.yaml
+kai pod demo-pod -n demo-ns \
+    --from-bundle tests/fixtures/bundles/r1_dns_failure_bundle.json \
+    --knowledge .kai/knowledge.yaml
 ```
 
 renders a new report section:
@@ -385,16 +394,23 @@ renders a new report section:
 CUSTOM KNOWLEDGE GUIDANCE
 -------------------------
   (source: .kai/knowledge.yaml)
-  [knowledge:internal-postgres-connectivity] Internal PostgreSQL connection troubleshooting
-      evidence: <id>... -> 'psycopg.OperationalError: ... Connection refused'
-      summary: The application reported a refused database connection. The root cause has
-      not yet been established...
+  [knowledge:internal-registry-outage] Internal container registry unreachable during a known maintenance window
+      evidence: <id>... -> 'failed to pull and unpack image "ghost-registry.example.net/..."...'
+      summary: This Pod failed to pull its image from an internal registry hostname. Our
+      team has seen this exact registry become unreachable during scheduled maintenance
+      windows -- this is team-defined guidance, not a confirmed diagnosis for this specific
+      Pod.
       next checks:
-        - Check whether the database Service/Endpoint is actually reachable from this namespace.
-        - Verify the configured database host, port, and connection string are correct.
-        - Review the database workload's own status and any NetworkPolicy affecting this namespace.
-      runbook: runbooks/database-connectivity.md
+        - Check the team's registry on-call channel for an active maintenance window.
+        - Verify DNS resolution for the registry hostname from an in-cluster debug pod.
+        - Confirm the image tag still exists in the registry's own web UI.
 ```
+
+The pack's other two rules (`internal-postgres-connectivity`, a `runbook`-carrying example;
+`missing-configmap-or-secret-reference`, which has none — a `runbook` is always optional) won't
+match this particular bundle, since neither a refused database connection nor a
+`CreateContainerConfigError` waiting reason is present in it; that's expected, and matches the
+"no noisy false match" behavior described below.
 
 When no rule matches, the section says so in one line (`(none -- no custom rule ... matched
 this evidence)`) rather than staying silent or implying the investigation itself failed.
@@ -610,7 +626,7 @@ All tests run against synthetic `EvidenceBundle` fixtures and a fake Kubernetes 
 (the optional `openai` package not being installed in a `[dev]`-only environment) and one
 (symlink creation requiring a privilege this environment may not grant — knowledge-pack
 symlink-escape rejection is still covered; the one skip only means that specific OS-level
-symlink precondition couldn't be exercised here). 378 tests pass as of this entry (no live
+symlink precondition couldn't be exercised here). 379 tests pass as of this entry (no live
 Kubernetes access, no paid model call in that count). See
 `docs/phase-0.9-milestone-1-notes.md` and `docs/phase-0.10-milestone-2-notes.md` for the actual
 test run output from each implementation phase.

@@ -39,3 +39,21 @@ rules:
         - Confirm the referenced ConfigMap/Secret actually exists in this namespace.
         - Check for a recent rename or deletion of that ConfigMap/Secret.
         - Verify the Deployment's env/volume references match the current ConfigMap/Secret name.
+
+  - id: internal-registry-outage
+    description: Internal container registry unreachable during a known maintenance window
+
+    match:
+      evidence_contains:
+        - "ghost-registry.example.net"
+
+    guidance:
+      summary: >
+        This Pod failed to pull its image from an internal registry hostname. Our team has
+        seen this exact registry become unreachable during scheduled maintenance windows --
+        this is team-defined guidance, not a confirmed diagnosis for this specific Pod.
+
+      next_checks:
+        - Check the team's registry on-call channel for an active maintenance window.
+        - Verify DNS resolution for the registry hostname from an in-cluster debug pod.
+        - Confirm the image tag still exists in the registry's own web UI.
