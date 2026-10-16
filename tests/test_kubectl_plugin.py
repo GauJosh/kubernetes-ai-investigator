@@ -17,7 +17,7 @@ import json
 import os
 import shutil
 import subprocess
-import sys
+import sysconfig
 from pathlib import Path
 
 import pytest
@@ -33,8 +33,15 @@ pytestmark = pytest.mark.skipif(_BASH is None, reason="kubectl-kai requires a PO
 def _venv_script_dir() -> Path:
     """The directory holding the currently-running interpreter's own console scripts (where
     the `kai` entry point this test environment installed actually lives) -- `Scripts` on
-    Windows, `bin` elsewhere, mirroring how this project's own CLI is actually installed."""
-    return Path(sys.executable).parent
+    Windows, `bin` elsewhere. Deliberately `sysconfig.get_path("scripts")`, not
+    `Path(sys.executable).parent`: those two are the same directory only for a venv/virtualenv
+    layout (`python.exe` and `kai.exe` are siblings in `Scripts\\`); for a base/system Python
+    install on Windows (e.g. a CI runner's hosted toolcache, with no venv at all), console
+    scripts install into a separate `Scripts\\` subdirectory one level below `python.exe`'s own
+    directory, and `Path(sys.executable).parent` silently points at the wrong, script-less
+    directory instead of raising -- only surfacing as a subprocess FileNotFoundError once
+    something is actually run from it."""
+    return Path(sysconfig.get_path("scripts"))
 
 
 def _run_plugin(args: list[str], *, path: str | None = None) -> subprocess.CompletedProcess:
