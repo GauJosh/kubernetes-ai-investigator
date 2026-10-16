@@ -33,7 +33,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8,<9", "ruff>=0.6,<1"]
+dev = ["pytest>=8,<10", "ruff>=0.6,<1"]
 # Optional: only required to actually run the OpenAI-backed HypothesisModelClient
 # (ai/openai_client.py). The deterministic pipeline, and the entire offline test suite
 # (tests/test_ai_openai_client.py included -- it injects a fake raw client), need none of this.
