@@ -1,32 +1,62 @@
-# Kubernetes AI Investigator
+# Kubernetes AI Investigator (`kai`)
 
-An evidence-first, read-only Kubernetes investigation engine. It collects a bounded, frozen
-snapshot of a Pod's evidence, correlates it deterministically, and produces a report whose
-findings are always traceable to specific, validated evidence — no AI model is required for any
-of this.
+**Evidence-first Kubernetes troubleshooting CLI with deterministic diagnostics, team-defined
+runbooks, and optional AI hypotheses.**
 
-**Current scope: 11 deterministic rules across three fault categories, plus optional AI
-hypotheses.** Rules R1–R4 diagnose Startup-fault failures (image pull: DNS failure, tag/reference
-not found, registry authorization failure; and a bounded, log-assisted crash-diagnosis rule with
-an explicit "insufficient evidence" outcome). Rules R5–R10 diagnose Scheduling-fault failures
-(node cordon, resource capacity, taint/toleration, node selector/affinity, pod anti-affinity —
-confirmed against real sibling-Pod placement, not just the scheduler's message — unbound
-PersistentVolumeClaim) for Pods that are `Pending` and unscheduled. R11 diagnoses liveness/
-readiness probe failures, correlated with the container's actual status. When a failure doesn't
-match any of R1-R11, the report says so explicitly rather than staying silent or implying the
-Pod is healthy (`engine:no_rule_matched` — see Usage below). AI hypotheses (`--with-ai`) are
-entirely optional, off by default, and never required to get a useful report — and, when
-enabled, can propose a hypothesis for exactly that unrecognized-pattern case too, without
-needing a matching deterministic rule to exist first. Teams can also layer their own
-deterministic guidance on top via an optional, versioned YAML knowledge pack (`--knowledge
-PATH`) — no AI, no Python code, no API key required (see Custom knowledge packs below). See
-`docs/phase-0.8-mvp-blueprint.md` for the approved architecture and
-`docs/phase-0.9-milestone-1-notes.md`/`docs/phase-0.10-milestone-2-notes.md`/
-`docs/phase-0.13-probe-failure-rule-design.md` for what each milestone built.
+[![CI](https://github.com/GauJosh/kubernetes-ai-investigator/actions/workflows/ci.yml/badge.svg)](https://github.com/GauJosh/kubernetes-ai-investigator/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/github/license/GauJosh/kubernetes-ai-investigator)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
 
-**This is read-only by construction**: no write, `exec`, `attach`, `port-forward`, or eviction
-call exists anywhere in this codebase, and `Secret` objects are never read. Saved evidence
-bundles are sanitized by default before being written to disk.
+`kai` investigates a single Kubernetes Pod the way a careful on-call engineer would: collect a
+bounded, frozen snapshot of its real evidence first, run it through deterministic diagnostic
+rules, and only ever report a finding that cites the exact evidence behind it. No AI model is
+required for any of this — AI is one optional, clearly-labeled layer on top, never the thing
+holding the report together.
+
+**What makes it different** from "ask an LLM to look at your cluster": every deterministic
+finding (rules R1–R11, covering image-pull/startup failures, scheduling failures, and
+liveness/readiness probe failures) is produced by ordinary, auditable Python logic, not a model
+call, and is validated against the collected evidence before it can appear in a report. AI
+hypotheses are opt-in, never required, and are kept visibly separate from confirmed findings.
+Teams can also add their own environment-specific guidance — in plain YAML and Markdown, no
+Python required — without touching this project's code at all.
+
+```bash
+kai pod my-pod -n my-ns --kubeconfig ~/.kube/config
+```
+
+```mermaid
+flowchart LR
+    A["Kubernetes API<br/>(or a saved bundle)"] --> B["Collector<br/>read-only, bounded"]
+    B --> C["EvidenceBundle<br/>content-hashed, validated"]
+    C --> D["Deterministic rules<br/>R1-R11"]
+    C --> E["Custom knowledge pack<br/>optional: --knowledge"]
+    C --> F["AI hypotheses<br/>optional: --with-ai"]
+    D --> G["InvestigationReport"]
+    E --> G
+    F --> G
+```
+
+## Key capabilities
+
+- **Deterministic diagnosis** — 11 rules across three fault categories (Startup-fault,
+  Scheduling-fault, Runtime-health-fault), each ordinary code, not a model call.
+- **Evidence-backed findings** — every finding cites the specific evidence it came from; an
+  unmatched failure is reported as "insufficient evidence," never a silent guess.
+- **Optional AI hypotheses** (`--with-ai`) — off by default, never required, kept visibly
+  separate from deterministic findings, and validated against the same evidence.
+- **Team-defined knowledge packs** (`--knowledge`) — plain YAML rules and Markdown runbooks,
+  no Python code and no AI required, for your own operational patterns.
+- **Offline replay** (`--from-bundle`) — reproduce an investigation deterministically from a
+  saved evidence bundle, with no cluster access at all.
+- **Read-only, sanitized by default** — no write/`exec`/`attach`/`port-forward`/eviction call
+  exists anywhere in this codebase; `Secret` values are never read; saved evidence bundles are
+  sanitized by default before being written to disk.
+
+This project does not fully automate root-cause analysis, and it does not resolve incidents by
+itself — it collects and correlates real evidence and proposes next steps for a human (or an
+AI layer you explicitly enable) to pursue. See "Limitations, stated plainly" below for what it
+does not yet cover.
 
 ## Installation
 
@@ -97,6 +127,52 @@ evidence" result, never a silent guess. If a genuine usage/collection problem oc
 path, a cluster permission problem), the CLI prints a one-line `error:` message and exits
 non-zero; if only the optional AI step is misconfigured (step 4), it prints a `warning:` and
 still exits `0` with the full deterministic report intact — see "Understanding failures" below.
+
+## Example output
+
+A real, abridged report from this repository's own committed synthetic fixture (step 6 above,
+with `--knowledge .kai/knowledge.yaml` added — see "Custom knowledge packs" below):
+
+```
+$ kai pod demo-pod -n demo-ns \
+    --from-bundle tests/fixtures/bundles/r1_dns_failure_bundle.json \
+    --knowledge .kai/knowledge.yaml
+
+DETERMINISTIC FINDINGS
+----------------------
+  [rule:R1_dns_failure] Image pull for container 'server' failed: DNS resolution failure
+      contacting the registry ('failed to pull and unpack image
+      "ghost-registry.example.net/demo/adservice:v0.10.3": ... no such host').
+      evidence: 39c2cf7feb50... -> 'failed to pull and unpack image "ghost-registry...'
+      limitation: Matched a known class of containerd DNS-failure wording; other container
+      runtimes may phrase this differently and would not be caught by this rule.
+
+AI HYPOTHESES
+-------------
+  (not attempted -- run with --with-ai to enable)
+
+CUSTOM KNOWLEDGE GUIDANCE
+-------------------------
+  (source: .kai/knowledge.yaml)
+  [knowledge:internal-registry-outage] Internal container registry unreachable during a
+      known maintenance window
+      summary: This Pod failed to pull its image from an internal registry hostname. Our
+      team has seen this exact registry become unreachable during scheduled maintenance
+      windows -- this is team-defined guidance, not a confirmed diagnosis for this Pod.
+      next checks:
+        - Check the team's registry on-call channel for an active maintenance window.
+        - Verify DNS resolution for the registry hostname from an in-cluster debug pod.
+
+NEXT STEPS
+----------
+  (none)
+```
+
+Three things to notice: the deterministic finding and the custom-knowledge match are reported
+in separate, clearly labeled sections even though they're triggered by the same evidence;
+neither one is presented as more "proven" than it should be (the custom guidance explicitly
+says so); and `AI HYPOTHESES` honestly reports that AI was never invoked, rather than omitting
+the section or implying it ran and found nothing.
 
 ## Usage
 
@@ -571,9 +647,9 @@ guarantee, and the error message when `kai` isn't installed.
   raw candidate text or evidence content) so a report can finally say *why* nothing was
   accepted, without changing what gets accepted or rejected. Both fields default to
   `None`/`[]` and are absent from any report saved before this change — a report that predates
-  them still parses and renders exactly as it always has. See
-  `docs/phase-0.11-ai-hypothesis-layer-design.md` and
-  `docs/phase-0.12-citation-reference-increment-notes.md` for the full record.
+  them still parses and renders exactly as it always has (the full design record for this
+  layer is kept in the maintainer's own development notes, not all of which are part of this
+  public repository).
 - No database, message broker, or web service — this is a CLI that reads evidence and writes
   files.
 - No Python plugin framework. Teams extend `kai` with YAML rules and Markdown runbooks only
@@ -608,7 +684,7 @@ guarantee, and the error message when `kai` isn't installed.
   surface (`tests/test_api_surface.py`) and behaves correctly against synthetic evidence. They
   prove **nothing** about what RBAC grant is actually bound to a deployed ServiceAccount — that is
   a separate, later validation step (RBAC policy review, then live authorization testing), not
-  performed by this milestone's test suite. See `docs/phase-0.8-mvp-blueprint.md` §H.
+  performed by this milestone's test suite.
 - `STALE` is a defined `EvidenceStatus` value that this milestone's single-pass collector never
   produces (there is nothing to compare against within one snapshot). It is exercised only by a
   hand-constructed fixture in the test suite, to prove the type and validator handle it correctly
@@ -623,13 +699,16 @@ pytest
 
 All tests run against synthetic `EvidenceBundle` fixtures and a fake Kubernetes client
 (`tests/fakes.py`) — none require a cluster, and none are skipped or marked pending except one
-(the optional `openai` package not being installed in a `[dev]`-only environment) and one
-(symlink creation requiring a privilege this environment may not grant — knowledge-pack
-symlink-escape rejection is still covered; the one skip only means that specific OS-level
-symlink precondition couldn't be exercised here). 379 tests pass as of this entry (no live
-Kubernetes access, no paid model call in that count). See
-`docs/phase-0.9-milestone-1-notes.md` and `docs/phase-0.10-milestone-2-notes.md` for the actual
-test run output from each implementation phase.
+(the optional `openai` package not being installed in a `[dev]`-only environment) and,
+environment-dependently, one more (symlink creation requiring a privilege some sandboxes don't
+grant — knowledge-pack symlink-escape rejection is still covered by other tests in the same
+suite either way). CI (badge above) runs this full suite on every push and pull request across
+the supported Python/OS matrix — see `.github/workflows/ci.yml` for the exact matrix, and check
+the badge or the Actions tab for current results rather than a count written down here, which
+would only go stale.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to propose a change, and
+[SECURITY.md](SECURITY.md) for how to report a vulnerability.
 
 ## Project layout
 
@@ -662,7 +741,9 @@ src/k8s_investigator/
                    matching against evidence (matcher.py); never touches ai/ or rules/
   cli.py           `kai pod <name> ...` (also installed as `investigate`, a trivial alias)
 tests/             synthetic fixtures + a fake Kubernetes client; no live cluster
-docs/              the full research, design, and decision record for this project
+docs/research/     the published subset of this project's pre-implementation research record
+                   (landscape survey, architecture alternatives, access-matrix, evaluation
+                   strategy -- see Documentation below)
 integrations/
   kubectl/kubectl-kai  optional kubectl plugin -- forwards to kai unchanged (see above)
 .kai/
@@ -673,9 +754,33 @@ integrations/
 
 ## Documentation
 
-The complete research and design history lives in `docs/` — `docs/open-questions.md` tracks every
-material decision's status (approved / recommended / open / deferred);
-`docs/phase-0.8-mvp-blueprint.md` is the approved architecture; `docs/phase-0.9-milestone-1-notes.md`
-and `docs/phase-0.10-milestone-2-notes.md` record what each milestone actually built, deviated
-on, and tested; `docs/research/read-only-access-matrix.md` §7-§8 documents the exact Milestone 2
-API calls and RBAC.
+This repository publishes the pre-implementation research record under `docs/research/`, kept
+for anyone evaluating the decisions behind this project (not deleted once the code existed):
+
+- [`docs/research/landscape-research.md`](docs/research/landscape-research.md) — the initial
+  survey of existing Kubernetes troubleshooting/diagnostics tools and where this project
+  differs.
+- [`docs/research/architecture-alternatives.md`](docs/research/architecture-alternatives.md) —
+  alternatives considered and the tradeoffs behind the architecture this project settled on.
+- [`docs/research/evidence-access-options.md`](docs/research/evidence-access-options.md) —
+  why this project built a narrow, read-only collector instead of adopting an existing
+  general-purpose cluster-access layer.
+- [`docs/research/read-only-access-matrix.md`](docs/research/read-only-access-matrix.md) — the
+  exact, per-object RBAC verbs this project needs and why each one is justified individually.
+- [`docs/research/event-timeline-contract.md`](docs/research/event-timeline-contract.md) — what
+  this project can and cannot honestly claim about *when* something happened, given Kubernetes
+  Events' own TTL and ordering guarantees.
+- [`docs/research/evaluation-strategy.md`](docs/research/evaluation-strategy.md) — the
+  evaluation approach behind `tests/eval_scenarios.py`.
+- [`docs/research/cloud-opsbench-evidence-feasibility.md`](docs/research/cloud-opsbench-evidence-feasibility.md)
+  — a bounded feasibility check against a third-party failure-case dataset, run before
+  committing to the rule bank's current scope.
+
+Day-to-day implementation notes (per-milestone build logs, in-progress design proposals) are
+kept in the maintainer's own development notes and are not all part of this public repository;
+the published research record above covers the decisions that matter for evaluating this
+project, not a line-by-line history of every commit.
+
+## License
+
+Licensed under the [Apache License, Version 2.0](LICENSE).
