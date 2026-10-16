@@ -376,7 +376,6 @@ def test_cli_with_ai_succeeded_end_to_end(tmp_path, capsys, monkeypatch):
 
     findings, _ = evaluate_bundle(bundle)
     deterministic = [f for f in findings if f.produced_by == "rule:R1_dns_failure"][0]
-    evidence_id = deterministic.evidence_ids[0]
 
     fake_client = FakeHypothesisModelClient()
     fake_client.response = _json.dumps(

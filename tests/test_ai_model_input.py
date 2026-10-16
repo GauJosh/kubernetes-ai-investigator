@@ -8,8 +8,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-import pytest
-
 from k8s_investigator.ai.model_input import DEFAULT_MAX_PAYLOAD_CHARS, build_model_input, make_line_ref
 from k8s_investigator.canonical import content_hash
 from k8s_investigator.models.evidence import EvidenceBundle, EvidenceItem, EvidenceStatus

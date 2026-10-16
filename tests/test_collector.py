@@ -5,8 +5,6 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import pytest
-
 from k8s_investigator.collector.client import (
     ApiForbiddenError,
     ApiNotFoundError,

@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-from .models.evidence import EvidenceStatus
 from .models.findings import Finding
 from .models.report import (
     AIHypothesisOutcome,

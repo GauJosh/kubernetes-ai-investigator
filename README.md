@@ -707,8 +707,9 @@ the supported Python/OS matrix — see `.github/workflows/ci.yml` for the exact 
 the badge or the Actions tab for current results rather than a count written down here, which
 would only go stale.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for how to propose a change, and
-[SECURITY.md](SECURITY.md) for how to report a vulnerability.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to propose a change,
+[SECURITY.md](SECURITY.md) for how to report a vulnerability, and
+[CHANGELOG.md](CHANGELOG.md) for what changed in each release.
 
 ## Project layout
 

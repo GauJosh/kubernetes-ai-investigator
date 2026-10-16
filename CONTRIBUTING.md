@@ -27,12 +27,17 @@ pip install -e ".[dev]"
 
 ```bash
 pytest
+ruff check src tests
 ```
 
 The full suite runs entirely offline against synthetic `EvidenceBundle` fixtures and a fake
 Kubernetes client (`tests/fakes.py`) — no live cluster, no AI-provider API key, and no network
 access are needed or used. A PR's tests must keep this property: no new test may require a
 live cluster or a real AI-provider call.
+
+`ruff` is configured with a deliberately small, correctness-only rule set (unused imports/
+variables, undefined names, syntax errors — see `[tool.ruff.lint]` in `pyproject.toml`), not
+import-sorting or style rules this project hasn't adopted. Don't widen it in an unrelated PR.
 
 ## What a good PR looks like
 

@@ -33,7 +33,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8,<9"]
+dev = ["pytest>=8,<9", "ruff>=0.6,<1"]
 # Optional: only required to actually run the OpenAI-backed HypothesisModelClient
 # (ai/openai_client.py). The deterministic pipeline, and the entire offline test suite
 # (tests/test_ai_openai_client.py included -- it injects a fake raw client), need none of this.
@@ -48,3 +48,11 @@ packages = ["src/k8s_investigator"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff.lint]
+# Deliberately a small, uncontroversial correctness-only rule set -- not the full default
+# selection (which includes import-sorting/style rules this project has never adopted and
+# would require a broad reformatting pass to satisfy). F = pyflakes (unused imports/variables,
+# undefined names, etc.); E9 = syntax errors. Expanding this set is a separate, deliberate
+# decision, not something to do incidentally.
+select = ["F", "E9"]

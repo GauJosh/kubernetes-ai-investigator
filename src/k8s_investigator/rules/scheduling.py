@@ -26,8 +26,6 @@ from .patterns import (
     TAINT_SUBSTRING,
     UNSCHEDULABLE_SUBSTRING,
     matches_any,
-    parse_cpu_quantity,
-    parse_memory_quantity,
 )
 
 _SCHEDULING_FAILURE_EVENT_REASONS = frozenset({"FailedScheduling"})
@@ -177,7 +175,6 @@ def _evaluate_r6(pod: EvidenceItem, event: EvidenceItem, rel) -> list[Finding]:
 
     is_cpu = "insufficient cpu" in (event.payload or {}).get("message", "").lower()
     resource = "cpu" if is_cpu else "memory"
-    parser = parse_cpu_quantity if is_cpu else parse_memory_quantity
 
     locators = [event_loc]
     request_descriptions = []
@@ -547,7 +544,6 @@ def _evaluate_r10(pod: EvidenceItem, event: EvidenceItem, rel) -> list[Finding]:
 
         pvc_spec = (pvc_item.payload or {}).get("spec", {})
         requested_storage_class = pvc_spec.get("storageClassName")
-        requested_capacity = (pvc_spec.get("resources", {}).get("requests") or {}).get("storage")
         requested_access_modes = set(pvc_spec.get("accessModes") or [])
 
         matching_pv = None
